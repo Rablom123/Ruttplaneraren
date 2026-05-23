@@ -1742,16 +1742,21 @@ function setupEventListeners() {
     const rows = document.querySelectorAll('.scanned-address-row');
     const durInput = state.globalDuration; // Always use the global duration directly!
     
-    const addressesToAdd = [];
+    // First, clear any previous error stylings
     rows.forEach(row => {
-      const chk = row.querySelector('.address-chk');
+      row.classList.remove('geocode-error');
       const txt = row.querySelector('.address-txt');
-      if (chk && chk.checked && txt && txt.value.trim().length > 0) {
-        addressesToAdd.push(txt.value.trim());
-      }
+      if (txt) txt.style.borderColor = '';
     });
     
-    if (addressesToAdd.length === 0) {
+    // Count checked rows
+    let checkedCount = 0;
+    rows.forEach(row => {
+      const chk = row.querySelector('.address-chk');
+      if (chk && chk.checked) checkedCount++;
+    });
+    
+    if (checkedCount === 0) {
       alert("Inga adresser är markerade!");
       return;
     }
@@ -1763,25 +1768,43 @@ function setupEventListeners() {
     approveBtn.innerHTML = `<span class="spinner" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle; margin-right: 8px; border-width: 2px;"></span> Geokodar adresser...`;
     
     let addedCount = 0;
+    let failedCount = 0;
     
     // Geocode and add each selected address to the route list
-    for (const addr of addressesToAdd) {
-      try {
-        const results = await searchAddress(addr);
-        if (results.length > 0) {
-          const newStop = {
-            id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-            address: results[0].address,
-            lat: results[0].lat,
-            lng: results[0].lng,
-            duration: durInput,
-            status: 'pending'
-          };
-          state.stops.push(newStop);
-          addedCount++;
+    for (const row of rows) {
+      const chk = row.querySelector('.address-chk');
+      const txt = row.querySelector('.address-txt');
+      
+      if (chk && chk.checked && txt && txt.value.trim().length > 0) {
+        const addr = txt.value.trim();
+        try {
+          const results = await searchAddress(addr);
+          if (results.length > 0) {
+            const newStop = {
+              id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+              address: results[0].address,
+              lat: results[0].lat,
+              lng: results[0].lng,
+              duration: durInput,
+              status: 'pending'
+            };
+            state.stops.push(newStop);
+            addedCount++;
+            
+            // Successfully geocoded! Uncheck this box so they don't add it again by mistake
+            chk.checked = false;
+          } else {
+            // Geocoding returned zero matches on map
+            failedCount++;
+            row.classList.add('geocode-error');
+            txt.style.borderColor = 'var(--danger)';
+          }
+        } catch (err) {
+          console.error("Geocoding failed for:", addr, err);
+          failedCount++;
+          row.classList.add('geocode-error');
+          txt.style.borderColor = 'var(--danger)';
         }
-      } catch (err) {
-        console.error("Geocoding failed for address:", addr, err);
       }
     }
     
@@ -1791,13 +1814,15 @@ function setupEventListeners() {
     if (addedCount > 0) {
       saveStateToStorage();
       renderStopsList();
-      
-      // Close scan modal, clean up camera, and recalculate route
+      calculateRoute(false);
+    }
+    
+    if (failedCount > 0) {
+      alert(`Klar! ${addedCount} stopp lades till i listan.\n\n${failedCount} adresser kunde inte hittas på kartan och har rödmarkerats. Kontrollera stavningen på de rödmarkerade fälten (t.ex. lägg till gatunummer eller rätta stavfel) direkt i rutorna, och klicka sedan på "Lägg till" igen!`);
+    } else {
+      // Everything succeeded, safe to close modal!
       stopCameraStream();
       scanModal.classList.add('hide');
-      calculateRoute(false);
-    } else {
-      alert("Kunde inte hitta koordinater för de markerade adresserna. Försök redigera dem manuellt.");
     }
   });
 }

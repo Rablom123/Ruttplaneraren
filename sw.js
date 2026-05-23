@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ruttplaneraren-v4';
+const CACHE_NAME = 'ruttplaneraren-v7';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
