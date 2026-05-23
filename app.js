@@ -885,6 +885,10 @@ function updateDashboard() {
     const hudEta = document.getElementById('hud-eta-timer');
     if (hudEta) hudEta.innerText = `Klar ca ${etaHours}:${etaMins}`;
     
+    // Also update HUD prominent badge inside the active stop card
+    const hudEtaBadge = document.getElementById('hud-eta-badge');
+    if (hudEtaBadge) hudEtaBadge.innerText = `🏁 Sluttid: Kl ${etaHours}:${etaMins}`;
+    
     // HUD distance left: remaining distance & stops calculation
     const hudDistLeft = document.getElementById('hud-dist-left');
     if (hudDistLeft) {

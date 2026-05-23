@@ -1339,6 +1339,21 @@ input[type="number"]:focus {
   border-radius: var(--radius-round);
 }
 
+.hud-eta-badge {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: var(--success);
+  font-weight: 800;
+  font-size: 1.1rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--radius-round);
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+}
+
 .hud-address-display {
   font-family: var(--font-title);
   font-size: 2.8rem;
@@ -1589,6 +1604,61 @@ input[type="number"]:focus {
   
   .hud-dist-left {
     font-size: 0.9rem;
+  }
+  
+  /* Compact mobile adjustments for HUD to prevent clipping on mobile screens */
+  .hud-header {
+    margin-bottom: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+  
+  .hud-active-card {
+    padding: 1.5rem 1rem !important;
+    margin-bottom: 1rem !important;
+    border-radius: 18px !important;
+  }
+  
+  .hud-badge-row {
+    margin-bottom: 1rem !important;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+  }
+  
+  .hud-address-display {
+    font-size: 1.7rem !important;
+    margin-bottom: 1rem !important;
+    max-width: 95% !important;
+  }
+  
+  .hud-btn-nav {
+    font-size: 1.15rem !important;
+    padding: 0.9rem 1.5rem !important;
+  }
+  
+  .hud-btn-nav svg {
+    width: 22px !important;
+    height: 22px !important;
+  }
+  
+  .hud-control-grid {
+    gap: 0.75rem !important;
+    margin-bottom: 1rem !important;
+  }
+  
+  .hud-action-btn {
+    font-size: 1rem !important;
+    padding: 1rem 0.5rem !important;
+    border-radius: 15px !important;
+  }
+  
+  .hud-bottom-bar {
+    padding-top: 0.75rem !important;
+  }
+  
+  .hud-eta-badge {
+    font-size: 0.9rem !important;
+    padding: 0.4rem 0.8rem !important;
   }
 }
 
