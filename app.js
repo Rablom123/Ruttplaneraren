@@ -717,7 +717,12 @@ async function runOCRScan(imageSource) {
 function parseAddressesFromText(text) {
   // Split into lines, trim, and filter out completely empty lines
   const lines = text.split('\n')
-    .map(l => l.trim())
+    .map(l => {
+      let clean = l.trim();
+      // Strip leading stop numbers, bullets, labels, etc. (common in Bring manifest lists)
+      clean = clean.replace(/^(stopp\s*\d+[:\-\s]*|[\d\.\-•:]+\s*|adress[:\-\s]*|gata[:\-\s]*|mottagaradress[:\-\s]*|leveransadress[:\-\s]*)/i, '');
+      return clean.trim();
+    })
     .filter(l => l.length > 2);
     
   // Blacklist words that commonly appear on shipping labels as noise
