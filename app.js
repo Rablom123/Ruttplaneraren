@@ -1257,6 +1257,39 @@ function stopCameraStream() {
 // ==========================================================================
 function setupEventListeners() {
   
+  // 0. Force Update & Clear Cache Binding
+  const clearCacheBtn = document.getElementById('clear-cache-btn');
+  if (clearCacheBtn) {
+    clearCacheBtn.addEventListener('click', async () => {
+      if (confirm("Vill du rensa appens cache och hämta den absolut senaste uppdateringen? (Din rutt försvinner inte!)")) {
+        // Unregister service workers
+        if ('serviceWorker' in navigator) {
+          try {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            for (let registration of registrations) {
+              await registration.unregister();
+            }
+          } catch (e) {
+            console.error("SW unregister error:", e);
+          }
+        }
+        // Clear caches
+        if ('caches' in window) {
+          try {
+            const keys = await caches.keys();
+            for (let key of keys) {
+              await caches.delete(key);
+            }
+          } catch (e) {
+            console.error("Cache clear error:", e);
+          }
+        }
+        // Force hard reload from server
+        window.location.reload(true);
+      }
+    });
+  }
+  
   // 1. Warehouse setup bindings
   const editWarehouseBtn = document.getElementById('edit-warehouse-btn');
   const warehouseForm = document.getElementById('warehouse-form');

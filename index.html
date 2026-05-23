@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   
   <!-- Main Stylesheet -->
-  <link rel="stylesheet" href="styles.css?v=4">
+  <link rel="stylesheet" href="styles.css?v=5">
   
   <!-- Icons via Lucide (modern icon library) -->
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -44,6 +44,12 @@
       <button id="install-btn" class="btn btn-secondary btn-icon-only hide" title="Installera App">
         <i data-lucide="download"></i>
         <span class="btn-text">Installera</span>
+      </button>
+      
+      <!-- Force Update & Clear Cache Button -->
+      <button id="clear-cache-btn" class="btn btn-secondary" title="Hämta senaste uppdateringen">
+        <i data-lucide="refresh-cw"></i>
+        <span>UPPDATERA</span>
       </button>
       
       <!-- Driving HUD Toggle -->
@@ -376,7 +382,7 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   
   <!-- Main Application Logic -->
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
   
   <!-- PWA Service Worker Registration -->
   <script>
