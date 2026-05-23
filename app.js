@@ -1534,7 +1534,7 @@ function setupEventListeners() {
   // Approve scanned OCR address & inject into route list
   document.getElementById('approve-scan-btn').addEventListener('click', async () => {
     const rows = document.querySelectorAll('.scanned-address-row');
-    const durInput = parseInt(document.getElementById('scanned-duration-input').value, 10) || state.globalDuration;
+    const durInput = state.globalDuration; // Always use the global duration directly!
     
     const addressesToAdd = [];
     rows.forEach(row => {
