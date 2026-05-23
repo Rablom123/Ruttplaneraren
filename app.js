@@ -213,6 +213,58 @@ function fitMapBounds() {
 // ==========================================================================
 // 3. GEOCODING & AUTOCOMPLETE (NOMINATIM API)
 // ==========================================================================
+// Helper function to format Swedish address and preserve street/house numbers
+function formatSwedishAddress(item, originalQuery) {
+  const addr = item.address || {};
+  
+  // Extract house number from original query (e.g. "Sveavägen 44" -> "44", "Kungsgatan 12 B" -> "12 B")
+  const queryNumberRegex = /\b(\d+\s*[a-zåäö]?)\b/i;
+  let originalNumber = "";
+  if (originalQuery) {
+    const numMatch = originalQuery.match(queryNumberRegex);
+    if (numMatch) {
+      originalNumber = numMatch[1].trim();
+    }
+  }
+  
+  let road = addr.road || addr.pedestrian || addr.footway || addr.cycleway || "";
+  let houseNumber = addr.house_number || originalNumber || ""; // Fallback to user's originally typed number if API returns undefined
+  let city = addr.city || addr.town || addr.village || addr.suburb || addr.municipality || "";
+  
+  if (road) {
+    let cleanRoad = road;
+    
+    // If we have a house number and it's not already in the street name string, append it!
+    if (houseNumber && !cleanRoad.toLowerCase().includes(houseNumber.toLowerCase())) {
+      cleanRoad = `${cleanRoad} ${houseNumber}`;
+    }
+    
+    // Capitalize words nicely
+    cleanRoad = cleanRoad.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+    
+    if (city) {
+      const cleanCity = city.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+      // Prevent duplicating city name if it's already part of the road string
+      if (cleanRoad.toLowerCase().includes(cleanCity.toLowerCase())) {
+        return cleanRoad;
+      }
+      return `${cleanRoad}, ${cleanCity}`;
+    }
+    return cleanRoad;
+  }
+  
+  // Fallback split method if no road was parsed, but inject house number if missing
+  let fallback = item.display_name.split(',').slice(0, 3).join(',').trim();
+  if (originalNumber && !fallback.toLowerCase().includes(originalNumber.toLowerCase())) {
+    const parts = fallback.split(',');
+    parts[0] = `${parts[0].trim()} ${originalNumber}`;
+    fallback = parts.join(', ');
+  }
+  
+  // Clean capitalization
+  return fallback.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+}
+
 async function searchAddress(query) {
   if (!query || query.trim().length < 3) return [];
   
@@ -227,12 +279,15 @@ async function searchAddress(query) {
     if (!response.ok) throw new Error('Geokodnings-fel');
     const data = await response.json();
     
-    return data.map(item => ({
-      address: item.display_name.split(',').slice(0, 3).join(','), // shorten details
-      fullAddress: item.display_name,
-      lat: parseFloat(item.lat),
-      lng: parseFloat(item.lon)
-    }));
+    return data.map(item => {
+      const formatted = formatSwedishAddress(item, query);
+      return {
+        address: formatted,
+        fullAddress: item.display_name,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon)
+      };
+    });
   } catch (error) {
     console.error('Nominatim Geocoding Error:', error);
     return [];
