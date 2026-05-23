@@ -1219,9 +1219,18 @@ function stopCameraStream() {
     state.cameraStream.getTracks().forEach(track => track.stop());
     state.cameraStream = null;
   }
+  
+  // Reset zoom state and style
+  state.zoomFactor = 1.0;
+  const zoomOverlay = document.getElementById('scan-zoom-overlay');
+  if (zoomOverlay) zoomOverlay.classList.add('hide');
+  const zoomSlider = document.getElementById('scan-zoom-slider');
+  if (zoomSlider) zoomSlider.value = 1.0;
+  
   const video = document.getElementById('scan-video');
   if (video) {
     video.srcObject = null;
+    video.style.transform = 'scale(1)';
     video.classList.add('hide');
   }
   const captureBtn = document.getElementById('capture-photo-btn');
@@ -1234,6 +1243,12 @@ function stopCameraStream() {
     if (canvas && canvas.classList.contains('hide')) {
       preview.classList.remove('hide');
     }
+  }
+  
+  // Deactivate fullscreen camera overlay styling
+  const scanModal = document.getElementById('scan-modal');
+  if (scanModal) {
+    scanModal.classList.remove('camera-active');
   }
 }
 
@@ -1484,6 +1499,7 @@ function setupEventListeners() {
         zoomOverlay.classList.remove('hide'); // Show zoom slider overlay!
         previewContainer.classList.add('hide');
         capturePhotoBtn.classList.remove('hide');
+        scanModal.classList.add('camera-active'); // Enable immersive fullscreen native camera view!
       })
       .catch((err) => {
         console.warn("Could not access live camera, falling back to file upload:", err);
