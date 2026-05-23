@@ -250,10 +250,10 @@ function formatSwedishAddress(item, originalQuery) {
     }
     
     // Capitalize words nicely
-    cleanRoad = cleanRoad.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+    cleanRoad = cleanRoad.toLowerCase().replace(/\b[a-zåäöéèüïäåæø]/gi, char => char.toUpperCase());
     
     if (city) {
-      const cleanCity = city.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+      const cleanCity = city.toLowerCase().replace(/\b[a-zåäöéèüïäåæø]/gi, char => char.toUpperCase());
       // Prevent duplicating city name if it's already part of the road string
       if (cleanRoad.toLowerCase().includes(cleanCity.toLowerCase())) {
         return cleanRoad;
@@ -272,7 +272,7 @@ function formatSwedishAddress(item, originalQuery) {
   }
   
   // Clean capitalization
-  return fallback.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+  return fallback.toLowerCase().replace(/\b[a-zåäöéèüïäåæø]/gi, char => char.toUpperCase());
 }
 
 async function searchAddress(query, isStop = false) {
@@ -1470,7 +1470,7 @@ function setupEventListeners() {
     let lat = 0, lng = 0, address = "";
     
     // Verify geocoding details
-    if (selectedStopItem && (selectedStopItem.address === addressInput || selectedStopItem.address === addressToSearch)) {
+    if (selectedStopItem && selectedStopItem.address === addressToSearch) {
       lat = selectedStopItem.lat;
       lng = selectedStopItem.lng;
       address = selectedStopItem.address;
