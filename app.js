@@ -52,6 +52,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderStopsList();
   updateDashboard();
   
+  // Real-time clock update: refresh Sluttid/ETA stats every 30 seconds automatically
+  setInterval(updateDashboard, 30000);
+  
   // If we already have stops, plot them on map
   if (state.stops.length > 0) {
     calculateRoute(false); // get cached/existing route drawn
