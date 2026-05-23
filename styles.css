@@ -1504,18 +1504,53 @@ input[type="number"]:focus {
   }
   
   .stop-item {
-    padding: 0.75rem;
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    grid-template-rows: auto auto;
+    gap: 0.6rem 0.5rem;
+    padding: 0.85rem;
+    align-items: center;
+  }
+  
+  .drag-handle {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  
+  .stop-index-badge {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  
+  .stop-content {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0; /* Forces text truncation if address is extremely long */
+  }
+  
+  .stop-actions-wrapper {
+    grid-column: 1 / span 3;
+    grid-row: 2;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding-top: 0.6rem;
+    margin-top: 0.2rem;
+    width: 100%;
     gap: 0.5rem;
   }
   
   .stop-status-select {
-    padding: 0.25rem 0.4rem;
+    padding: 0.35rem 0.5rem;
     font-size: 0.75rem;
+    flex-grow: 1;
+    max-width: 105px;
   }
   
   .btn-nav-stop {
-    padding: 0.35rem 0.5rem;
-    font-size: 0.7rem;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.75rem;
   }
   
   .hud-address-display {
