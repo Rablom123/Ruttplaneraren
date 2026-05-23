@@ -1833,3 +1833,34 @@ input[type="number"]:focus {
 .modal-overlay.camera-active .scan-result-card {
   display: none !important;
 }
+
+/* Floating Camera Lens Switcher */
+.modal-overlay.camera-active .scan-switch-camera-btn {
+  position: absolute !important;
+  bottom: 2.5rem !important;
+  right: 1.5rem !important; /* Floats to the right of the centered shutter button */
+  z-index: 100 !important;
+  background: rgba(15, 23, 42, 0.8) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  width: 52px !important;
+  height: 52px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: white !important;
+  cursor: pointer !important;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
+  transition: var(--transition) !important;
+}
+
+.modal-overlay.camera-active .scan-switch-camera-btn:active {
+  transform: scale(0.9) !important;
+}
+
+.modal-overlay.camera-active .scan-switch-camera-btn svg {
+  width: 22px !important;
+  height: 22px !important;
+}

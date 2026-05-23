@@ -14,7 +14,9 @@ const state = {
   hudActiveIndex: -1, // active stop index in HUD mode
   isHUDActive: false,
   cameraStream: null, // WebRTC live camera stream tracker
-  zoomFactor: 1.0     // Digital camera zoom scale factor
+  zoomFactor: 1.0,    // Digital camera zoom scale factor
+  availableCameras: [], // Discovered back-facing video input devices
+  currentCameraIndex: 0 // Currently active camera index in list
 };
 
 // Leaflet Map Globals
@@ -1237,6 +1239,10 @@ function stopCameraStream() {
   if (captureBtn) {
     captureBtn.classList.add('hide');
   }
+  const switchCameraBtn = document.getElementById('scan-switch-camera-btn');
+  if (switchCameraBtn) {
+    switchCameraBtn.classList.add('hide');
+  }
   const preview = document.getElementById('scan-preview-container');
   if (preview) {
     const canvas = document.getElementById('label-canvas');
@@ -1509,9 +1515,111 @@ function setupEventListeners() {
     videoElement.style.transform = `scale(${zoom})`;
   });
   
+  // Camera Switching & Setup Helpers
+  const startCamera = async (deviceId = null) => {
+    if (state.cameraStream) {
+      state.cameraStream.getTracks().forEach(track => track.stop());
+      state.cameraStream = null;
+    }
+    
+    const constraints = {
+      video: {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
+    };
+    
+    if (deviceId) {
+      constraints.video.deviceId = { exact: deviceId };
+    } else {
+      constraints.video.facingMode = { ideal: 'environment' };
+    }
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      state.cameraStream = stream;
+      videoElement.srcObject = stream;
+      videoElement.classList.remove('hide');
+      zoomOverlay.classList.remove('hide');
+      previewContainer.classList.add('hide');
+      capturePhotoBtn.classList.remove('hide');
+      scanModal.classList.add('camera-active');
+      
+      // Force hardware sensor zoom to minimum (most zoomed out) if supported
+      try {
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
+          const capabilities = videoTrack.getCapabilities();
+          if ('zoom' in capabilities) {
+            await videoTrack.applyConstraints({
+              advanced: [{ zoom: capabilities.zoom.min || 1.0 }]
+            });
+          }
+        }
+      } catch (zoomErr) {
+        console.warn("Hardware zoom min constraints failed:", zoomErr);
+      }
+      
+      // Scan and find other back cameras (now that we have permissions granted!)
+      await enumerateBackCameras(stream);
+      
+    } catch (err) {
+      console.warn("Could not start camera track:", err);
+      if (deviceId) {
+        // Fallback to default back camera if specific lens failed
+        await startCamera(null);
+      } else {
+        stopCameraStream();
+      }
+    }
+  };
+
+  const enumerateBackCameras = async (activeStream) => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      
+      // Find back cameras (exclude front/user facing ones if labels exist)
+      const backCameras = videoDevices.filter(device => {
+        const label = (device.label || '').toLowerCase();
+        return !label.includes('front') && !label.includes('user');
+      });
+      
+      const finalCameras = backCameras.length > 0 ? backCameras : videoDevices;
+      state.availableCameras = finalCameras.map(c => c.deviceId);
+      
+      // Detect current device ID
+      if (activeStream) {
+        const activeTrack = activeStream.getVideoTracks()[0];
+        if (activeTrack && activeTrack.getSettings) {
+          const activeDeviceId = activeTrack.getSettings().deviceId;
+          if (activeDeviceId) {
+            const idx = state.availableCameras.indexOf(activeDeviceId);
+            if (idx !== -1) {
+              state.currentCameraIndex = idx;
+            }
+          }
+        }
+      }
+      
+      // Show switcher if we discovered multiple lenses
+      const switchBtn = document.getElementById('scan-switch-camera-btn');
+      if (switchBtn) {
+        if (state.availableCameras.length > 1) {
+          switchBtn.classList.remove('hide');
+        } else {
+          switchBtn.classList.add('hide');
+        }
+      }
+    } catch (e) {
+      console.warn("Device enumeration failed:", e);
+    }
+  };
+
   cameraTrigger.addEventListener('click', () => {
     scanModal.classList.remove('hide');
-    // reset preview and zoom
     canvasElement.classList.add('hide');
     document.getElementById('scan-result-card').classList.add('hide');
     previewContainer.classList.remove('hide');
@@ -1520,33 +1628,23 @@ function setupEventListeners() {
     zoomSlider.value = 1.0;
     videoElement.style.transform = 'scale(1)';
     
-    // Attempt to start live WebRTC video stream
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
-      })
-      .then((stream) => {
-        state.cameraStream = stream;
-        videoElement.srcObject = stream;
-        videoElement.classList.remove('hide');
-        zoomOverlay.classList.remove('hide'); // Show zoom slider overlay!
-        previewContainer.classList.add('hide');
-        capturePhotoBtn.classList.remove('hide');
-        scanModal.classList.add('camera-active'); // Enable immersive fullscreen native camera view!
-      })
-      .catch((err) => {
-        console.warn("Could not access live camera, falling back to file upload:", err);
-        stopCameraStream();
-      });
-    } else {
-      console.warn("MediaDevices API not supported, falling back to file upload.");
-      stopCameraStream();
-    }
+    // Start camera stream (default back lens)
+    startCamera(null);
   });
+  
+  // Lens switch button click
+  const switchCameraBtn = document.getElementById('scan-switch-camera-btn');
+  if (switchCameraBtn) {
+    switchCameraBtn.addEventListener('click', () => {
+      if (state.availableCameras.length <= 1) return;
+      
+      // Cycle index
+      state.currentCameraIndex = (state.currentCameraIndex + 1) % state.availableCameras.length;
+      const nextDeviceId = state.availableCameras[state.currentCameraIndex];
+      
+      startCamera(nextDeviceId);
+    });
+  }
   
   // Capture photo from live video stream
   capturePhotoBtn.addEventListener('click', () => {
