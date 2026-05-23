@@ -951,19 +951,24 @@ input[type="number"]:focus {
   backdrop-filter: blur(8px);
   z-index: 500;
   display: flex;
-  align-items: flex-start; /* Changed from center to flex-start to prevent overflow cropping */
+  align-items: center; /* Center the modal content vertically on the screen */
   justify-content: center;
-  padding: 1.5rem 1rem;
-  overflow-y: auto; /* Enable natural vertical scrolling inside modal overlay */
+  padding: 1rem;
+  overflow: hidden; /* Prevent modal overlay scroll */
   transition: var(--transition);
 }
 
 .modal-content {
   width: 100%;
   max-width: 550px;
+  max-height: 85vh; /* Clamp the modal height to 85% of screen height */
   background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column; /* Stack header and body vertically */
   animation: modalOpen 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden; /* Prevent outer overflowing */
 }
 
 @keyframes modalOpen {
@@ -975,14 +980,14 @@ input[type="number"]:focus {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
   border-bottom: 1px solid var(--border-color);
-  padding-bottom: 1rem;
+  padding: 1rem 1.5rem;
+  margin-bottom: 0; /* No gap between header and body border */
 }
 
 .modal-header h2 {
   font-family: var(--font-title);
-  font-size: 1.3rem;
+  font-size: 1.2rem;
   font-weight: 800;
   display: flex;
   align-items: center;
@@ -1008,7 +1013,11 @@ input[type="number"]:focus {
 .modal-body {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  overflow-y: auto; /* Enable vertical scrolling internally inside modal body! */
+  -webkit-overflow-scrolling: touch; /* Momentum scrolling on mobile iOS devices */
+  flex: 1; /* Expand body to take up remaining height */
 }
 
 /* Viewport for scanning */
