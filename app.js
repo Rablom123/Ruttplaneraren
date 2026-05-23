@@ -16,7 +16,8 @@ const state = {
   cameraStream: null, // WebRTC live camera stream tracker
   zoomFactor: 1.0,    // Digital camera zoom scale factor
   availableCameras: [], // Discovered back-facing video input devices
-  currentCameraIndex: 0 // Currently active camera index in list
+  currentCameraIndex: 0, // Currently active camera index in list
+  defaultCity: ''      // Default city to append to typed or scanned addresses
 };
 
 // Leaflet Map Globals
@@ -75,6 +76,12 @@ function loadStateFromStorage() {
     document.getElementById('global-duration').value = state.globalDuration;
     document.getElementById('stop-duration-input').value = state.globalDuration;
   }
+  
+  const savedDefaultCity = localStorage.getItem('rm_default_city');
+  if (savedDefaultCity) {
+    state.defaultCity = savedDefaultCity;
+    document.getElementById('default-city-input').value = state.defaultCity;
+  }
 }
 
 // Save state to local storage
@@ -82,6 +89,7 @@ function saveStateToStorage() {
   localStorage.setItem('rm_warehouse', JSON.stringify(state.warehouse));
   localStorage.setItem('rm_stops', JSON.stringify(state.stops));
   localStorage.setItem('rm_global_duration', state.globalDuration.toString());
+  localStorage.setItem('rm_default_city', state.defaultCity);
 }
 
 // ==========================================================================
@@ -267,11 +275,16 @@ function formatSwedishAddress(item, originalQuery) {
   return fallback.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
 }
 
-async function searchAddress(query) {
+async function searchAddress(query, isStop = false) {
   if (!query || query.trim().length < 3) return [];
   
+  let searchQuery = query;
+  if (isStop && state.defaultCity && !query.toLowerCase().includes(state.defaultCity.toLowerCase())) {
+    searchQuery = `${query}, ${state.defaultCity}`;
+  }
+  
   try {
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1&countrycodes=se`;
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5&addressdetails=1&countrycodes=se`;
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'RuttPlanerarenBudbil/1.0 (ruttmaster@example.com)'
@@ -1214,7 +1227,7 @@ function setHUDActiveStopStatus(status) {
 // ==========================================================================
 // 9. GEOCODING DROPDOWN UTILS
 // ==========================================================================
-function bindAutocomplete(inputId, dropdownId, onSelectCallback) {
+function bindAutocomplete(inputId, dropdownId, onSelectCallback, isStop = false) {
   const input = document.getElementById(inputId);
   const dropdown = document.getElementById(dropdownId);
   let timeout = null;
@@ -1229,7 +1242,7 @@ function bindAutocomplete(inputId, dropdownId, onSelectCallback) {
     }
     
     timeout = setTimeout(async () => {
-      const results = await searchAddress(query);
+      const results = await searchAddress(query, isStop);
       
       if (results.length === 0) {
         dropdown.classList.add('hide');
@@ -1411,10 +1424,18 @@ function setupEventListeners() {
   });
   
   // 2. Add Stops autocomplete
+  const defaultCityInput = document.getElementById('default-city-input');
+  if (defaultCityInput) {
+    defaultCityInput.addEventListener('input', (e) => {
+      state.defaultCity = e.target.value.trim();
+      saveStateToStorage();
+    });
+  }
+
   let selectedStopItem = null;
   bindAutocomplete('stop-address-input', 'stop-autocomplete-results', (selectedItem) => {
     selectedStopItem = selectedItem;
-  });
+  }, true);
   
   // "Lägg till i listan" button
   const addStopBtn = document.getElementById('add-stop-text-btn');
@@ -1437,7 +1458,7 @@ function setupEventListeners() {
       lng = selectedStopItem.lng;
       address = selectedStopItem.address;
     } else {
-      const results = await searchAddress(addressInput);
+      const results = await searchAddress(addressInput, true);
       if (results.length > 0) {
         lat = results[0].lat;
         lng = results[0].lng;
@@ -1827,7 +1848,7 @@ function setupEventListeners() {
       if (chk && chk.checked && txt && txt.value.trim().length > 0) {
         const addr = txt.value.trim();
         try {
-          const results = await searchAddress(addr);
+          const results = await searchAddress(addr, true);
           if (results.length > 0) {
             const newStop = {
               id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),

@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   
   <!-- Main Stylesheet -->
-  <link rel="stylesheet" href="styles.css?v=9">
+  <link rel="stylesheet" href="styles.css?v=10">
   
   <!-- Icons via Lucide (modern icon library) -->
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -148,6 +148,12 @@
         
         <!-- Add Stop Inputs -->
         <div class="add-stop-form">
+          <!-- Default City Setting -->
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label for="default-city-input"><i data-lucide="building"></i> Standardort (Valfritt):</label>
+            <input type="text" id="default-city-input" placeholder="T.ex. Varberg (fylls i automatiskt)...">
+          </div>
+          
           <div class="search-input-wrapper">
             <input type="text" id="stop-address-input" placeholder="Skriv in en adress att leverera till...">
             <button id="search-stop-btn" class="btn btn-primary btn-icon-only" title="Sök adress">
@@ -387,7 +393,7 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   
   <!-- Main Application Logic -->
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
   
   <!-- PWA Service Worker Registration -->
   <script>
