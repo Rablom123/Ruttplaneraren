@@ -1794,9 +1794,10 @@ input[type="number"]:focus {
 }
 
 .modal-overlay.camera-active #scan-video {
-  object-fit: cover !important; /* Native immersive cover fill! */
+  object-fit: contain !important; /* Native contain to see the full frame without artificial zoom */
   width: 100% !important;
   height: 100% !important;
+  background: #000 !important; /* Ensure black background around the video stream */
 }
 
 /* Premium Oval Native Shutter Button floating at the very bottom */
