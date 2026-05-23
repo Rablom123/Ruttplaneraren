@@ -1504,6 +1504,7 @@ function setupEventListeners() {
     document.getElementById('stop-address-input').value = '';
     document.getElementById('stop-number-input').value = '';
     selectedStopItem = null;
+    document.getElementById('stop-address-input').focus();
     
     // Auto-calculate route for the new stop in queue
     calculateRoute(false);
