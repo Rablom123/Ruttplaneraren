@@ -713,56 +713,100 @@ async function runOCRScan(imageSource) {
   }
 }
 
-// Custom parser to extract multiple Swedish address lines
+// Custom parser to extract multiple Swedish address lines while ignoring noise
 function parseAddressesFromText(text) {
+  // Split into lines, trim, and filter out completely empty lines
   const lines = text.split('\n')
     .map(l => l.trim())
-    .filter(l => l.length > 3 && !l.includes("POSTNORD") && !l.includes("EXPRESS"));
+    .filter(l => l.length > 2);
+    
+  // Blacklist words that commonly appear on shipping labels as noise
+  const blacklist = [
+    'postnord', 'express', 'varubrev', 'mypack', 'collect', 'dhl', 'schenker', 'ups', 'fedex',
+    'vikt', 'weight', ' kg', ' kolli', 'paket', 'frakt', 'tracking', 'sändning', 'order',
+    'referens', ' ref', 'mottagare', 'avsändare', 'sender', 'receiver', 'ship to', 'from',
+    'tel', 'mobil', 'phone', 'e-post', 'email', 'retur', 'undeliverable', 'barcode', 'co2'
+  ];
   
-  // Standard Swedish address pattern: StreetName followed by street number, e.g. "Sveavägen 44" or "Kungsgatan 12"
-  const streetRegex = /^([a-zåäöé\- ]{3,})\s+(\d+)\s*([a-zåäö]?)\b/i;
-  const zipCityRegex = /\b(\d{3})\s*(\d{2})\s+([a-zåäö\- ]{3,})/i;
+  // Standard Swedish street name + house number regex:
+  // Must start with a street name (letters, spaces, dashes), followed by a house number (digits + optional letter like 12, 44A, 12 B)
+  const streetRegex = /^([A-ZÅÄÖa-zåäöéèüïäå\-\s]{3,})\s+(\d+\s*[A-Za-zåäöÅÄÖ]?)\b/i;
+  
+  // Standard Swedish Zip Code + City regex:
+  // E.g. "111 34 Stockholm" or "11134 Stockholm" or "41108 GÖTEBORG"
+  const zipCityRegex = /\b(\d{3})\s*(\d{2})\s+([A-ZÅÄÖa-zåäöé\-\s]{3,})\b/i;
   
   const foundAddresses = [];
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     
+    // Check if line contains any blacklisted noise words
+    const containsBlacklist = blacklist.some(term => line.toLowerCase().includes(term));
+    if (containsBlacklist) continue;
+    
+    // Check if line matches a street address structure
     if (streetRegex.test(line)) {
       const streetMatch = line.match(streetRegex)[0].trim();
-      let cityMatch = "";
+      let cityPart = "";
       
-      // Look at the current line or the next 2 lines to find a zip code / city
+      // Look at the current line or the next 2 lines for a Zip + City line
       for (let offset = 0; offset <= 2; offset++) {
         const targetIdx = i + offset;
         if (targetIdx < lines.length) {
           const targetLine = lines[targetIdx];
+          // Don't check target lines if they are blacklisted
+          if (blacklist.some(term => targetLine.toLowerCase().includes(term))) continue;
+          
           if (zipCityRegex.test(targetLine)) {
             const match = targetLine.match(zipCityRegex);
-            cityMatch = match[3].trim(); // Extract the city name
+            const zip = `${match[1]} ${match[2]}`;
+            const city = match[3].trim();
+            cityPart = `${zip} ${city}`;
             break;
           }
         }
       }
       
-      // Format address and capitalize words nicely
-      let fullAddress = cityMatch ? `${streetMatch}, ${cityMatch}` : streetMatch;
-      const cleanAddress = fullAddress.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+      // Assemble the final address string
+      let fullAddress = streetMatch;
+      if (cityPart) {
+        fullAddress = `${streetMatch}, ${cityPart}`;
+      }
       
+      // Clean and capitalize each word nicely (e.g. "SVEAVÄGEN 44" -> "Sveavägen 44")
+      const cleanAddress = fullAddress
+        .replace(/\b([A-ZÅÄÖa-zåäöéèüïäå]+)\b/g, word => {
+          // If word is a zip code, keep it as digits
+          if (/^\d+$/.test(word)) return word;
+          return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+        })
+        .replace(/\s+/g, ' ');
+        
       if (!foundAddresses.includes(cleanAddress)) {
         foundAddresses.push(cleanAddress);
       }
     }
   }
   
-  // Fallback: If no strict street patterns were matched but we have some lines that look like addresses,
-  // extract any lines that have text and numbers (e.g. "Odengatan 56")
+  // Fallback: If no street + zip combinations were found,
+  // let's grab lines that strictly match the streetRegex on their own (without zip code)
   if (foundAddresses.length === 0) {
     for (let line of lines) {
-      if (/\b\d+\b/.test(line) && line.length > 6 && line.length < 50) {
-        const cleanLine = line.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
-        if (!foundAddresses.includes(cleanLine)) {
-          foundAddresses.push(cleanLine);
+      const containsBlacklist = blacklist.some(term => line.toLowerCase().includes(term));
+      if (containsBlacklist) continue;
+      
+      if (streetRegex.test(line)) {
+        const streetMatch = line.match(streetRegex)[0].trim();
+        // Capitalize nicely
+        const cleanAddress = streetMatch
+          .replace(/\b([A-ZÅÄÖa-zåäöéèüïäå]+)\b/g, word => {
+            if (/^\d+$/.test(word)) return word;
+            return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+          });
+          
+        if (!foundAddresses.includes(cleanAddress)) {
+          foundAddresses.push(cleanAddress);
         }
       }
     }
