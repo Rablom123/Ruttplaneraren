@@ -1490,7 +1490,11 @@ function setupEventListeners() {
     // Attempt to start live WebRTC video stream
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' } // prefer back camera
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
       })
       .then((stream) => {
         state.cameraStream = stream;
