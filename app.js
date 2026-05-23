@@ -13,7 +13,8 @@ const state = {
   globalDuration: 4, // default minutes per stop
   hudActiveIndex: -1, // active stop index in HUD mode
   isHUDActive: false,
-  cameraStream: null // WebRTC live camera stream tracker
+  cameraStream: null, // WebRTC live camera stream tracker
+  zoomFactor: 1.0     // Digital camera zoom scale factor
 };
 
 // Leaflet Map Globals
@@ -603,24 +604,50 @@ async function runOCRScan(imageSource) {
     const text = result.data.text;
     console.log("OCR Text Detected:", text);
     
-    // Parse address from OCR text
-    const detectedAddress = parseAddressFromText(text);
+    // Parse multiple addresses from OCR text
+    const detectedAddresses = parseAddressesFromText(text);
     
-    if (detectedAddress) {
-      document.getElementById('scanned-address-input').value = detectedAddress;
-      document.getElementById('scanned-duration-input').value = state.globalDuration;
-      resultCard.classList.remove('hide');
+    const listContainer = document.getElementById('scanned-addresses-list');
+    listContainer.innerHTML = '';
+    
+    if (detectedAddresses.length === 0) {
+      // Fallback row
+      const row = document.createElement('div');
+      row.className = 'scanned-address-row';
+      row.innerHTML = `
+        <input type="checkbox" checked class="address-chk">
+        <input type="text" class="address-txt" value="" placeholder="Kunde inte tyda adresser. Skriv manuellt...">
+      `;
+      listContainer.appendChild(row);
     } else {
-      // Show raw text if no nice match found, or prefill with first lines
-      const cleanLines = text.split('\n')
-        .map(l => l.trim())
-        .filter(l => l.length > 5);
-      
-      const fallbackText = cleanLines.slice(0, 3).join(', ');
-      document.getElementById('scanned-address-input').value = fallbackText || "Kunde inte tyda adressen. Skriv manuellt.";
-      document.getElementById('scanned-duration-input').value = state.globalDuration;
-      resultCard.classList.remove('hide');
+      // Create checklist for each scanned address
+      detectedAddresses.forEach((addr, idx) => {
+        const row = document.createElement('div');
+        row.className = 'scanned-address-row';
+        row.innerHTML = `
+          <input type="checkbox" checked class="address-chk" id="addr-chk-${idx}">
+          <input type="text" class="address-txt" value="${addr}" id="addr-txt-${idx}" placeholder="Adress...">
+        `;
+        listContainer.appendChild(row);
+      });
     }
+    
+    // Update count title
+    const count = detectedAddresses.length;
+    const titleElement = document.getElementById('scan-result-title');
+    if (count > 1) {
+      titleElement.innerHTML = `<i data-lucide="check-circle-2" class="text-success"></i> ${count} adresser identifierade!`;
+    } else if (count === 1) {
+      titleElement.innerHTML = `<i data-lucide="check-circle-2" class="text-success"></i> Adress identifierad!`;
+    } else {
+      titleElement.innerHTML = `<i data-lucide="alert-triangle" class="text-warning"></i> Skriv in adress manuellt`;
+    }
+    
+    document.getElementById('scanned-duration-input').value = state.globalDuration;
+    
+    // Re-trigger Lucide icon renders
+    lucide.createIcons();
+    resultCard.classList.remove('hide');
   } catch (error) {
     console.error("OCR Scan failed:", error);
     laser.style.display = 'none';
@@ -629,40 +656,62 @@ async function runOCRScan(imageSource) {
   }
 }
 
-// Custom parser to extract Swedish address lines
-function parseAddressFromText(text) {
-  const lines = text.split('\n').map(l => l.trim());
+// Custom parser to extract multiple Swedish address lines
+function parseAddressesFromText(text) {
+  const lines = text.split('\n')
+    .map(l => l.trim())
+    .filter(l => l.length > 3 && !l.includes("POSTNORD") && !l.includes("EXPRESS"));
   
-  // Standard Swedish address pattern: StreetName followed by street number, e.g. "Sveavägen 44" or "Storgatan 12 B"
-  // Look for a line containing typical street keywords or matches street + number
-  const streetRegex = /([a-zåäöé\- ]{3,})\s+(\d+)\s*([a-zåäö]?)\b/i;
+  // Standard Swedish address pattern: StreetName followed by street number, e.g. "Sveavägen 44" or "Kungsgatan 12"
+  const streetRegex = /^([a-zåäöé\- ]{3,})\s+(\d+)\s*([a-zåäö]?)\b/i;
   const zipCityRegex = /\b(\d{3})\s*(\d{2})\s+([a-zåäö\- ]{3,})/i;
   
-  let detectedStreet = "";
-  let detectedCity = "";
+  const foundAddresses = [];
   
-  for (let line of lines) {
-    if (streetRegex.test(line) && !line.includes("POSTNORD") && !line.includes("EXPRESS")) {
-      const match = line.match(streetRegex);
-      detectedStreet = match[0].trim();
-      break;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    if (streetRegex.test(line)) {
+      const streetMatch = line.match(streetRegex)[0].trim();
+      let cityMatch = "";
+      
+      // Look at the current line or the next 2 lines to find a zip code / city
+      for (let offset = 0; offset <= 2; offset++) {
+        const targetIdx = i + offset;
+        if (targetIdx < lines.length) {
+          const targetLine = lines[targetIdx];
+          if (zipCityRegex.test(targetLine)) {
+            const match = targetLine.match(zipCityRegex);
+            cityMatch = match[3].trim(); // Extract the city name
+            break;
+          }
+        }
+      }
+      
+      // Format address and capitalize words nicely
+      let fullAddress = cityMatch ? `${streetMatch}, ${cityMatch}` : streetMatch;
+      const cleanAddress = fullAddress.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+      
+      if (!foundAddresses.includes(cleanAddress)) {
+        foundAddresses.push(cleanAddress);
+      }
     }
   }
   
-  for (let line of lines) {
-    if (zipCityRegex.test(line)) {
-      const match = line.match(zipCityRegex);
-      detectedCity = match[3].trim();
-      break;
+  // Fallback: If no strict street patterns were matched but we have some lines that look like addresses,
+  // extract any lines that have text and numbers (e.g. "Odengatan 56")
+  if (foundAddresses.length === 0) {
+    for (let line of lines) {
+      if (/\b\d+\b/.test(line) && line.length > 6 && line.length < 50) {
+        const cleanLine = line.replace(/\b[a-zåäö]/gi, char => char.toUpperCase());
+        if (!foundAddresses.includes(cleanLine)) {
+          foundAddresses.push(cleanLine);
+        }
+      }
     }
   }
   
-  // Format clean address
-  if (detectedStreet) {
-    return detectedCity ? `${detectedStreet}, ${detectedCity}` : detectedStreet;
-  }
-  
-  return null;
+  return foundAddresses;
 }
 
 // ==========================================================================
@@ -1347,12 +1396,26 @@ function setupEventListeners() {
   const previewContainer = document.getElementById('scan-preview-container');
   const canvasElement = document.getElementById('label-canvas');
   
+  const zoomOverlay = document.getElementById('scan-zoom-overlay');
+  const zoomSlider = document.getElementById('scan-zoom-slider');
+  
+  // Track zoom level changes
+  zoomSlider.addEventListener('input', (e) => {
+    const zoom = parseFloat(e.target.value);
+    state.zoomFactor = zoom;
+    videoElement.style.transform = `scale(${zoom})`;
+  });
+  
   cameraTrigger.addEventListener('click', () => {
     scanModal.classList.remove('hide');
-    // reset preview
+    // reset preview and zoom
     canvasElement.classList.add('hide');
     document.getElementById('scan-result-card').classList.add('hide');
     previewContainer.classList.remove('hide');
+    
+    state.zoomFactor = 1.0;
+    zoomSlider.value = 1.0;
+    videoElement.style.transform = 'scale(1)';
     
     // Attempt to start live WebRTC video stream
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -1363,6 +1426,7 @@ function setupEventListeners() {
         state.cameraStream = stream;
         videoElement.srcObject = stream;
         videoElement.classList.remove('hide');
+        zoomOverlay.classList.remove('hide'); // Show zoom slider overlay!
         previewContainer.classList.add('hide');
         capturePhotoBtn.classList.remove('hide');
       })
@@ -1384,14 +1448,27 @@ function setupEventListeners() {
     canvasElement.width = videoElement.videoWidth || 640;
     canvasElement.height = videoElement.videoHeight || 480;
     
-    // Draw current video frame onto canvas
-    ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+    const zoom = state.zoomFactor || 1.0;
+    
+    if (zoom > 1.0) {
+      // Draw mathematically cropped/zoomed camera view onto canvas
+      const cropWidth = canvasElement.width / zoom;
+      const cropHeight = canvasElement.height / zoom;
+      const startX = (canvasElement.width - cropWidth) / 2;
+      const startY = (canvasElement.height - cropHeight) / 2;
+      
+      ctx.drawImage(videoElement, startX, startY, cropWidth, cropHeight, 0, 0, canvasElement.width, canvasElement.height);
+    } else {
+      // Draw current full video frame onto canvas
+      ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+    }
     
     // Stop live stream immediately
     stopCameraStream();
     
-    // Show canvas, hide video
+    // Show canvas, hide video & overlay
     videoElement.classList.add('hide');
+    zoomOverlay.classList.add('hide');
     canvasElement.classList.remove('hide');
     capturePhotoBtn.classList.add('hide');
     previewContainer.classList.add('hide');
@@ -1434,6 +1511,7 @@ function setupEventListeners() {
         canvasElement.classList.remove('hide');
         previewContainer.classList.add('hide');
         videoElement.classList.add('hide');
+        zoomOverlay.classList.add('hide');
         capturePhotoBtn.classList.add('hide');
         
         // Perform OCR analysis
@@ -1455,43 +1533,65 @@ function setupEventListeners() {
   
   // Approve scanned OCR address & inject into route list
   document.getElementById('approve-scan-btn').addEventListener('click', async () => {
-    const addressInput = document.getElementById('scanned-address-input').value;
+    const rows = document.querySelectorAll('.scanned-address-row');
     const durInput = parseInt(document.getElementById('scanned-duration-input').value, 10) || state.globalDuration;
     
-    if (!addressInput || addressInput.trim().length === 0) {
-      alert("Vänligen ange en giltig adress!");
+    const addressesToAdd = [];
+    rows.forEach(row => {
+      const chk = row.querySelector('.address-chk');
+      const txt = row.querySelector('.address-txt');
+      if (chk && chk.checked && txt && txt.value.trim().length > 0) {
+        addressesToAdd.push(txt.value.trim());
+      }
+    });
+    
+    if (addressesToAdd.length === 0) {
+      alert("Inga adresser är markerade!");
       return;
     }
     
-    // Geocode OCR text
-    const results = await searchAddress(addressInput);
-    let lat = 0, lng = 0, cleanAddress = "";
+    // UI Button feedback to show loading state
+    const approveBtn = document.getElementById('approve-scan-btn');
+    const originalHtml = approveBtn.innerHTML;
+    approveBtn.disabled = true;
+    approveBtn.innerHTML = `<span class="spinner" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle; margin-right: 8px; border-width: 2px;"></span> Geokodar adresser...`;
     
-    if (results.length > 0) {
-      lat = results[0].lat;
-      lng = results[0].lng;
-      cleanAddress = results[0].address;
+    let addedCount = 0;
+    
+    // Geocode and add each selected address to the route list
+    for (const addr of addressesToAdd) {
+      try {
+        const results = await searchAddress(addr);
+        if (results.length > 0) {
+          const newStop = {
+            id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+            address: results[0].address,
+            lat: results[0].lat,
+            lng: results[0].lng,
+            duration: durInput,
+            status: 'pending'
+          };
+          state.stops.push(newStop);
+          addedCount++;
+        }
+      } catch (err) {
+        console.error("Geocoding failed for address:", addr, err);
+      }
+    }
+    
+    approveBtn.disabled = false;
+    approveBtn.innerHTML = originalHtml;
+    
+    if (addedCount > 0) {
+      saveStateToStorage();
+      renderStopsList();
+      
+      // Close scan modal, clean up camera, and recalculate route
+      stopCameraStream();
+      scanModal.classList.add('hide');
+      calculateRoute(false);
     } else {
-      alert("Kunde inte geokoda adressen. Ange den mer specifikt.");
-      return;
+      alert("Kunde inte hitta koordinater för de markerade adresserna. Försök redigera dem manuellt.");
     }
-    
-    const newStop = {
-      id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      address: cleanAddress,
-      lat: lat,
-      lng: lng,
-      duration: durInput,
-      status: 'pending'
-    };
-    
-    state.stops.push(newStop);
-    saveStateToStorage();
-    renderStopsList();
-    
-    // Close scan modal, clean up camera, and recalculate route
-    stopCameraStream();
-    scanModal.classList.add('hide');
-    calculateRoute(false);
   });
 }
