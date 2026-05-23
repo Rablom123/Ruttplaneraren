@@ -1,0 +1,19 @@
+{
+  "name": "RuttPlaneraren",
+  "short_name": "RuttPlaneraren",
+  "description": "Din smarta ruttplanerare för budbilsleveranser med OCR-skanning och ruttoptimering.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B0F19",
+  "theme_color": "#0B0F19",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
