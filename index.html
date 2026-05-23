@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   
   <!-- Main Stylesheet -->
-  <link rel="stylesheet" href="styles.css?v=11">
+  <link rel="stylesheet" href="styles.css?v=12">
   
   <!-- Icons via Lucide (modern icon library) -->
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -156,11 +156,11 @@
           
           <div class="search-input-wrapper flex-row-layout">
             <div class="input-address-field">
-              <input type="text" id="stop-address-input" placeholder="Gatunamn (t.ex. Kungsgatan)...">
+              <input type="text" id="stop-address-input" placeholder="Gatunamn (t.ex. Kungsgatan)..." enterkeyhint="next">
               <div id="stop-autocomplete-results" class="autocomplete-dropdown hide"></div>
             </div>
             <div class="input-number-field">
-              <input type="text" id="stop-number-input" placeholder="Nr (t.ex. 12 B)...">
+              <input type="text" id="stop-number-input" placeholder="Nr (t.ex. 12 B)..." inputmode="numeric" enterkeyhint="done">
             </div>
             <button id="search-stop-btn" class="btn btn-primary btn-icon-only" title="Sök adress">
               <i data-lucide="search"></i>
@@ -398,7 +398,7 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   
   <!-- Main Application Logic -->
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
   
   <!-- PWA Service Worker Registration -->
   <script>

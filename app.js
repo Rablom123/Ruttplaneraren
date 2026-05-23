@@ -1435,6 +1435,10 @@ function setupEventListeners() {
   let selectedStopItem = null;
   bindAutocomplete('stop-address-input', 'stop-autocomplete-results', (selectedItem) => {
     selectedStopItem = selectedItem;
+    const numberInputField = document.getElementById('stop-number-input');
+    if (numberInputField) {
+      numberInputField.focus();
+    }
   }, true);
   
   // "Lägg till i listan" button
@@ -1507,6 +1511,26 @@ function setupEventListeners() {
   
   addStopBtn.addEventListener('click', handleAddStop);
   searchStopBtn.addEventListener('click', handleAddStop);
+  
+  // Enter keys navigation & submission listeners
+  const stopAddressInputField = document.getElementById('stop-address-input');
+  const stopNumberInputField = document.getElementById('stop-number-input');
+  
+  if (stopAddressInputField && stopNumberInputField) {
+    stopAddressInputField.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        stopNumberInputField.focus();
+      }
+    });
+
+    stopNumberInputField.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleAddStop();
+      }
+    });
+  }
   
   // 3. Optimize Buttons & Clear Routings
   document.getElementById('optimize-route-btn').addEventListener('click', () => {
