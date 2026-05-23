@@ -1442,23 +1442,36 @@ function setupEventListeners() {
   const searchStopBtn = document.getElementById('search-stop-btn');
   
   const handleAddStop = async () => {
-    const addressInput = document.getElementById('stop-address-input').value;
+    const addressInput = document.getElementById('stop-address-input').value.trim();
+    const numberInput = document.getElementById('stop-number-input').value.trim();
     const durInput = parseInt(document.getElementById('stop-duration-input').value, 10) || state.globalDuration;
     
-    if (!addressInput || addressInput.trim().length === 0) {
+    if (!addressInput || addressInput.length === 0) {
       alert("Vänligen skriv in en adress!");
       return;
+    }
+    
+    // Join street name and street number beautifully (inserting before comma if standardort exists)
+    let addressToSearch = addressInput;
+    if (numberInput) {
+      if (addressInput.includes(',')) {
+        const parts = addressInput.split(',');
+        parts[0] = `${parts[0].trim()} ${numberInput}`;
+        addressToSearch = parts.join(', ');
+      } else {
+        addressToSearch = `${addressInput} ${numberInput}`;
+      }
     }
     
     let lat = 0, lng = 0, address = "";
     
     // Verify geocoding details
-    if (selectedStopItem && selectedStopItem.address === addressInput) {
+    if (selectedStopItem && (selectedStopItem.address === addressInput || selectedStopItem.address === addressToSearch)) {
       lat = selectedStopItem.lat;
       lng = selectedStopItem.lng;
       address = selectedStopItem.address;
     } else {
-      const results = await searchAddress(addressInput, true);
+      const results = await searchAddress(addressToSearch, true);
       if (results.length > 0) {
         lat = results[0].lat;
         lng = results[0].lng;
@@ -1485,6 +1498,7 @@ function setupEventListeners() {
     
     // Clean input fields
     document.getElementById('stop-address-input').value = '';
+    document.getElementById('stop-number-input').value = '';
     selectedStopItem = null;
     
     // Auto-calculate route for the new stop in queue

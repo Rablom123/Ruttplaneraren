@@ -1878,3 +1878,21 @@ input[type="number"]:focus {
   25% { transform: translateX(-4px); }
   75% { transform: translateX(4px); }
 }
+
+/* Two-column layout for autofilling and typing street number afterward */
+.flex-row-layout {
+  display: flex !important;
+  gap: 0.5rem !important;
+  width: 100% !important;
+  align-items: stretch !important;
+}
+
+.input-address-field {
+  flex: 3.2 !important; /* Gatunamn takes ~76% */
+  position: relative !important;
+}
+
+.input-number-field {
+  flex: 1 !important; /* Gatunummer takes ~24% */
+  min-width: 82px !important;
+}
