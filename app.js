@@ -12,7 +12,8 @@ const state = {
   routeDuration: 0, // seconds
   globalDuration: 4, // default minutes per stop
   hudActiveIndex: -1, // active stop index in HUD mode
-  isHUDActive: false
+  isHUDActive: false,
+  cameraStream: null // WebRTC live camera stream tracker
 };
 
 // Leaflet Map Globals
@@ -1108,6 +1109,30 @@ function bindAutocomplete(inputId, dropdownId, onSelectCallback) {
   });
 }
 
+// Stop WebRTC camera stream and reset viewport states
+function stopCameraStream() {
+  if (state.cameraStream) {
+    state.cameraStream.getTracks().forEach(track => track.stop());
+    state.cameraStream = null;
+  }
+  const video = document.getElementById('scan-video');
+  if (video) {
+    video.srcObject = null;
+    video.classList.add('hide');
+  }
+  const captureBtn = document.getElementById('capture-photo-btn');
+  if (captureBtn) {
+    captureBtn.classList.add('hide');
+  }
+  const preview = document.getElementById('scan-preview-container');
+  if (preview) {
+    const canvas = document.getElementById('label-canvas');
+    if (canvas && canvas.classList.contains('hide')) {
+      preview.classList.remove('hide');
+    }
+  }
+}
+
 // ==========================================================================
 // 10. BINDING COMPONENT EVENT LISTENERS
 // ==========================================================================
@@ -1317,23 +1342,75 @@ function setupEventListeners() {
   const scanModal = document.getElementById('scan-modal');
   const closeScanBtn = document.getElementById('close-scan-modal-btn');
   const cameraTrigger = document.getElementById('camera-scan-trigger-btn');
+  const videoElement = document.getElementById('scan-video');
+  const capturePhotoBtn = document.getElementById('capture-photo-btn');
+  const previewContainer = document.getElementById('scan-preview-container');
+  const canvasElement = document.getElementById('label-canvas');
   
   cameraTrigger.addEventListener('click', () => {
     scanModal.classList.remove('hide');
     // reset preview
-    document.getElementById('label-canvas').classList.add('hide');
+    canvasElement.classList.add('hide');
     document.getElementById('scan-result-card').classList.add('hide');
-    document.querySelector('.preview-placeholder-icon').classList.remove('hide');
-    document.querySelector('.scan-preview-container p').classList.remove('hide');
+    previewContainer.classList.remove('hide');
+    
+    // Attempt to start live WebRTC video stream
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' } // prefer back camera
+      })
+      .then((stream) => {
+        state.cameraStream = stream;
+        videoElement.srcObject = stream;
+        videoElement.classList.remove('hide');
+        previewContainer.classList.add('hide');
+        capturePhotoBtn.classList.remove('hide');
+      })
+      .catch((err) => {
+        console.warn("Could not access live camera, falling back to file upload:", err);
+        stopCameraStream();
+      });
+    } else {
+      console.warn("MediaDevices API not supported, falling back to file upload.");
+      stopCameraStream();
+    }
+  });
+  
+  // Capture photo from live video stream
+  capturePhotoBtn.addEventListener('click', () => {
+    if (!state.cameraStream) return;
+    
+    const ctx = canvasElement.getContext('2d');
+    canvasElement.width = videoElement.videoWidth || 640;
+    canvasElement.height = videoElement.videoHeight || 480;
+    
+    // Draw current video frame onto canvas
+    ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+    
+    // Stop live stream immediately
+    stopCameraStream();
+    
+    // Show canvas, hide video
+    videoElement.classList.add('hide');
+    canvasElement.classList.remove('hide');
+    capturePhotoBtn.classList.add('hide');
+    previewContainer.classList.add('hide');
+    
+    // Run Tesseract OCR on canvas
+    runOCRScan(canvasElement);
   });
   
   closeScanBtn.addEventListener('click', () => {
+    stopCameraStream();
     scanModal.classList.add('hide');
   });
   
   // Clicked outside modal content close trigger
   scanModal.addEventListener('click', (e) => {
-    if (e.target === scanModal) scanModal.classList.add('hide');
+    if (e.target === scanModal) {
+      stopCameraStream();
+      scanModal.classList.add('hide');
+    }
   });
   
   // Scan file input trigger
@@ -1342,23 +1419,25 @@ function setupEventListeners() {
     const file = e.target.files[0];
     if (!file) return;
     
+    // Stop live camera if it was running
+    stopCameraStream();
+    
     const reader = new FileReader();
     reader.onload = (event) => {
-      // Draw uploaded image onto canvas to display
-      const canvas = document.getElementById('label-canvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvasElement.getContext('2d');
       const img = new Image();
       
       img.onload = () => {
-        canvas.width = img.width;
-        canvas.height = img.height;
+        canvasElement.width = img.width;
+        canvasElement.height = img.height;
         ctx.drawImage(img, 0, 0);
-        canvas.classList.remove('hide');
-        document.querySelector('.preview-placeholder-icon').classList.add('hide');
-        document.querySelector('.scan-preview-container p').classList.add('hide');
+        canvasElement.classList.remove('hide');
+        previewContainer.classList.add('hide');
+        videoElement.classList.add('hide');
+        capturePhotoBtn.classList.add('hide');
         
         // Perform OCR analysis
-        runOCRScan(canvas);
+        runOCRScan(canvasElement);
       };
       img.src = event.target.result;
     };
@@ -1367,9 +1446,11 @@ function setupEventListeners() {
   
   // Generate & Scan Test Label
   document.getElementById('generate-test-label-btn').addEventListener('click', () => {
+    // Stop live camera if running
+    stopCameraStream();
+    
     generateMockLabelCanvas();
-    const canvas = document.getElementById('label-canvas');
-    runOCRScan(canvas);
+    runOCRScan(canvasElement);
   });
   
   // Approve scanned OCR address & inject into route list
@@ -1408,7 +1489,8 @@ function setupEventListeners() {
     saveStateToStorage();
     renderStopsList();
     
-    // Close scan modal and recalculate route
+    // Close scan modal, clean up camera, and recalculate route
+    stopCameraStream();
     scanModal.classList.add('hide');
     calculateRoute(false);
   });

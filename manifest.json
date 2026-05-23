@@ -4,7 +4,7 @@
   "description": "Din smarta ruttplanerare för budbilsleveranser med OCR-skanning och ruttoptimering.",
   "start_url": "./index.html",
   "display": "standalone",
-  "orientation": "any",
+  "orientation": "portrait",
   "background_color": "#0B0F19",
   "theme_color": "#0B0F19",
   "id": "se.ruttplaneraren.app",

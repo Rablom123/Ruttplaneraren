@@ -239,12 +239,16 @@
         <div id="scan-viewport" class="scan-viewport">
           <div class="scan-laser"></div>
           
-          <!-- Mock labels preview / Canvas container -->
+          <!-- Live Video Viewfinder -->
+          <video id="scan-video" autoplay playsinline class="hide" style="width: 100%; height: 100%; object-fit: cover;"></video>
+          
+          <!-- Mock labels preview / Fallback -->
           <div id="scan-preview-container" class="scan-preview-container">
             <i data-lucide="image" class="preview-placeholder-icon"></i>
             <p>Välj ett foto, använd kameran eller testa med en av våra testsedlar nedan.</p>
-            <canvas id="label-canvas" class="hide"></canvas>
           </div>
+          
+          <canvas id="label-canvas" class="hide"></canvas>
           
           <!-- OCR loader screen -->
           <div id="ocr-loader" class="ocr-loader hide">
@@ -255,7 +259,11 @@
         
         <!-- Input file/camera buttons -->
         <div class="scan-actions">
-          <label class="btn btn-primary flex-1 btn-file-label">
+          <button id="capture-photo-btn" class="btn btn-success flex-1 hide">
+            <i data-lucide="aperture"></i> Fota & Skanna
+          </button>
+          
+          <label class="btn btn-primary flex-1 btn-file-label" id="file-upload-label">
             <i data-lucide="image-plus"></i> Välj foto
             <input type="file" id="scan-file-input" accept="image/*" class="hide">
           </label>
