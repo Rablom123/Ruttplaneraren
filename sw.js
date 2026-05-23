@@ -5,7 +5,9 @@ const ASSETS_TO_CACHE = [
   './styles.css',
   './app.js',
   './manifest.json',
-  './assets/icon.svg'
+  './assets/icon.svg',
+  './assets/icon-192.png',
+  './assets/icon-512.png'
 ];
 
 // Install Event - cache essential assets
@@ -36,7 +38,6 @@ self.addEventListener('activate', (e) => {
 
 // Fetch Event - network first, cache fallback for dynamically fetched or static assets
 self.addEventListener('fetch', (e) => {
-  // Only handle GET requests and skip browser extension requests (e.g. chrome-extension://)
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) {
     return;
   }
