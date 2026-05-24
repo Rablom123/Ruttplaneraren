@@ -858,25 +858,43 @@ function updateDashboard() {
   // Driving time from OSRM (seconds -> minutes)
   const driveMinutes = Math.round(state.routeDuration / 60);
   
-  // Work time sum of stop durations
-  const workMinutes = state.stops.reduce((sum, stop) => sum + parseInt(stop.duration || 0, 10), 0);
+  // Calculate remaining work minutes (only pending stops!)
+  const remainingWorkMinutes = state.stops
+    .filter(s => s.status === 'pending')
+    .reduce((sum, stop) => sum + parseInt(stop.duration || 0, 10), 0);
   
-  // Total duration (driving + working)
-  const totalMinutes = driveMinutes + workMinutes;
+  // Estimate remaining drive time (linear approximation based on remaining segments)
+  let remainingDriveMinutes = driveMinutes;
+  if (totalStopsCount > 0 && completedCount > 0) {
+    const segmentsTotal = totalStopsCount + 1;
+    const segmentsLeft = Math.max(1, segmentsTotal - completedCount);
+    remainingDriveMinutes = Math.round(driveMinutes * (segmentsLeft / segmentsTotal));
+  }
+  
+  // Total remaining duration
+  const remainingTotalMinutes = remainingDriveMinutes + remainingWorkMinutes;
   
   // Distans conversion from meters -> km
-  const distanceKm = (state.routeDistance / 1000).toFixed(1);
+  const totalDistanceKm = (state.routeDistance / 1000).toFixed(1);
   
-  // Update texts
-  document.getElementById('stat-total-time').innerText = formatMinutes(totalMinutes);
-  document.getElementById('stat-drive-time').innerText = formatMinutes(driveMinutes);
-  document.getElementById('stat-work-time').innerText = formatMinutes(workMinutes);
-  document.getElementById('stat-distance').innerText = `${distanceKm} km`;
+  // Estimate remaining distance
+  let remainingDistanceKm = totalDistanceKm;
+  if (totalStopsCount > 0 && completedCount > 0) {
+    const segmentsTotal = totalStopsCount + 1;
+    const segmentsLeft = Math.max(1, segmentsTotal - completedCount);
+    remainingDistanceKm = ((state.routeDistance / 1000) * (segmentsLeft / segmentsTotal)).toFixed(1);
+  }
+  
+  // Update texts (we show remaining stats in HUD and on dashboard as they progress)
+  document.getElementById('stat-total-time').innerText = formatMinutes(remainingTotalMinutes);
+  document.getElementById('stat-drive-time').innerText = formatMinutes(remainingDriveMinutes);
+  document.getElementById('stat-work-time').innerText = formatMinutes(remainingWorkMinutes);
+  document.getElementById('stat-distance').innerText = `${remainingDistanceKm} km`;
   
   // Sluttid (ETA)
   if (totalStopsCount > 0) {
     const now = new Date();
-    const etaDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
+    const etaDate = new Date(now.getTime() + remainingTotalMinutes * 60 * 1000);
     const etaHours = String(etaDate.getHours()).padStart(2, '0');
     const etaMins = String(etaDate.getMinutes()).padStart(2, '0');
     
@@ -894,7 +912,7 @@ function updateDashboard() {
     const hudDistLeft = document.getElementById('hud-dist-left');
     if (hudDistLeft) {
       const remainingStops = state.stops.filter(s => s.status === 'pending').length;
-      hudDistLeft.innerText = `Kvar: ${distanceKm} km (${remainingStops} stopp)`;
+      hudDistLeft.innerText = `Kvar: ${remainingDistanceKm} km (${remainingStops} stopp)`;
     }
   } else {
     document.getElementById('stat-eta').innerText = "Inga stopp tillagda";
@@ -1672,9 +1690,9 @@ function setupEventListeners() {
         }
       };
       
-      // Real-time parser to split long continuous speech streams and add checklist rows
-      function extractAndAddAddressFromSegment(text) {
-        console.log('Extracting addresses from final speech segment:', text);
+      // Real-time parser to sync all addresses from the completed final transcript
+      function syncAddressesFromTranscript(text) {
+        console.log('Syncing addresses from final transcript:', text);
         
         // 1. Clean punctuation
         let cleanText = text.trim().replace(/[\.\?!,]+/g, ' ').replace(/\s+/g, ' ');
@@ -1692,9 +1710,38 @@ function setupEventListeners() {
           if (parsed && parsed.street) {
             const formattedAddress = parsed.number ? `${parsed.street} ${parsed.number}` : parsed.street;
             
-            // Check for duplicates in the checklist rows
-            const existingInputs = Array.from(voiceAddressesList.querySelectorAll('.address-txt')).map(inp => inp.value.trim().toLowerCase());
-            if (existingInputs.includes(formattedAddress.toLowerCase())) return;
+            // Check if this address or a partial exists in the checklist
+            const existingRows = Array.from(voiceAddressesList.querySelectorAll('.scanned-address-row'));
+            let alreadyExists = false;
+            let updatedExisting = false;
+            
+            for (const row of existingRows) {
+              const txtInput = row.querySelector('.address-txt');
+              if (txtInput) {
+                const val = txtInput.value.trim();
+                
+                // If it is an exact match
+                if (val.toLowerCase() === formattedAddress.toLowerCase()) {
+                  alreadyExists = true;
+                  break;
+                }
+                
+                // If the checklist contains a prefix (e.g. "Ringvägen") and we now parsed "Ringvägen 10"
+                if (formattedAddress.toLowerCase().startsWith(val.toLowerCase() + ' ')) {
+                  txtInput.value = formattedAddress; // Update in place!
+                  updatedExisting = true;
+                  break;
+                }
+                
+                // If the checklist has "Ringvägen 10" and we got a shorter partial "Ringvägen", ignore it
+                if (val.toLowerCase().startsWith(formattedAddress.toLowerCase() + ' ')) {
+                  alreadyExists = true;
+                  break;
+                }
+              }
+            }
+            
+            if (alreadyExists || updatedExisting) return;
             
             // Remove the empty placeholder if present
             const placeholder = voiceAddressesList.querySelector('.empty-voice-addresses');
@@ -1732,25 +1779,16 @@ function setupEventListeners() {
       }
       
       voiceRecognition.onresult = (event) => {
+        let finalTranscript = '';
         let interimTranscript = '';
         
-        // Loop through all results in the current session
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const segment = event.results[i][0].transcript.trim();
+        // Accumulate entire session transcript to handle appending speech engines
+        for (let i = 0; i < event.results.length; ++i) {
+          const transcriptText = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            if (!state.processedVoiceIndices) {
-              state.processedVoiceIndices = new Set();
-            }
-            if (!state.processedVoiceIndices.has(i)) {
-              state.processedVoiceIndices.add(i);
-              if (segment.length >= 3) {
-                state.spokenFinalSegments.push(segment);
-                // Extract and append checklist rows
-                extractAndAddAddressFromSegment(segment);
-              }
-            }
+            finalTranscript += transcriptText + ' ';
           } else {
-            interimTranscript += event.results[i][0].transcript;
+            interimTranscript += transcriptText;
           }
         }
         
@@ -1758,9 +1796,9 @@ function setupEventListeners() {
         const transcriptDiv = document.getElementById('voice-live-transcript');
         if (transcriptDiv) {
           let html = '';
-          state.spokenFinalSegments.forEach(seg => {
-            html += `<span class="transcript-final">${seg} </span>`;
-          });
+          if (finalTranscript) {
+            html += `<span class="transcript-final">${finalTranscript.trim()} </span>`;
+          }
           if (interimTranscript) {
             html += `<span class="transcript-interim">${interimTranscript}...</span>`;
           }
@@ -1771,6 +1809,11 @@ function setupEventListeners() {
           
           transcriptDiv.innerHTML = html;
           transcriptDiv.scrollTop = transcriptDiv.scrollHeight; // Keep scrolled to bottom
+        }
+        
+        // Sync and parse addresses from the accumulated final transcript
+        if (finalTranscript.trim().length >= 3) {
+          syncAddressesFromTranscript(finalTranscript.trim());
         }
       };
       
@@ -1784,10 +1827,6 @@ function setupEventListeners() {
           </div>
         `;
         lucide.createIcons();
-        
-        // Reset transcript trackers
-        state.spokenFinalSegments = [];
-        state.processedVoiceIndices = new Set();
         
         const transcriptDiv = document.getElementById('voice-live-transcript');
         if (transcriptDiv) {
