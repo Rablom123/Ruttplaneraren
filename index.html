@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   
   <!-- Main Stylesheet -->
-  <link rel="stylesheet" href="styles.css?v=18">
+  <link rel="stylesheet" href="styles.css?v=20">
   
   <!-- Icons via Lucide (modern icon library) -->
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -328,6 +328,63 @@
     </div>
   </div>
 
+  <!-- Voice Recognition Modal Overlay -->
+  <div id="voice-modal" class="modal-overlay hide">
+    <div class="glass-card modal-content">
+      <div class="modal-header">
+        <h2><i data-lucide="mic"></i> Röstinmatning adresser</h2>
+        <button id="close-voice-modal-btn" class="btn btn-close-modal"><i data-lucide="x"></i></button>
+      </div>
+      
+      <div class="modal-body" style="max-height: calc(85vh - 75px); overflow-y: auto;">
+        
+        <!-- Live Recording Pulsing Soundwave Visualizer -->
+        <div class="voice-recording-container">
+          <div class="voice-mic-wave-wrapper">
+            <div class="voice-wave wave-1"></div>
+            <div class="voice-wave wave-2"></div>
+            <div class="voice-wave wave-3"></div>
+            <div class="voice-mic-circle">
+              <i data-lucide="mic" class="voice-large-mic-icon"></i>
+            </div>
+          </div>
+          
+          <p id="voice-status-text" class="voice-status-text">🎤 Lyssnar... Tala på svenska nu.</p>
+          <p class="voice-help-text">Säg adresser efter varandra med en kort paus emellan (t.ex. "Kungsgatan 12" och sedan nästa). De tolkas och dyker upp i listan i realtid nedan.</p>
+        </div>
+
+        <!-- Live Speech Transcript Box (Gemini-style) -->
+        <div class="voice-live-transcript-container">
+          <div class="transcript-header">
+            <span><i data-lucide="message-square"></i> Röstström i realtid</span>
+            <span class="pulse-dot"></span>
+          </div>
+          <div id="voice-live-transcript" class="voice-live-transcript">
+            <span class="transcript-placeholder">Börja tala så strömmar orden här i realtid...</span>
+          </div>
+        </div>
+        
+        <!-- Voice addresses review checklist -->
+        <div id="voice-result-card" class="scan-result-card" style="margin-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 1.25rem;">
+          <h3><i data-lucide="check-circle-2" class="text-success"></i> Tolkade adresser:</h3>
+          <p class="scan-result-desc">Bocka i adresser att lägga till. Du kan klicka i textrutorna för att rätta eventuella stavfel innan du sparar.</p>
+          
+          <div id="voice-addresses-list" class="scanned-addresses-list">
+            <div class="empty-voice-addresses">
+              <i data-lucide="map-pin" style="width:24px;height:24px;opacity:0.5;margin-bottom:8px;"></i>
+              <p>Inga adresser tolkade än. Säg adresser som "Kungsgatan 12 Varberg" eller "Storgatan 5"...</p>
+            </div>
+          </div>
+          
+          <button id="approve-voice-btn" class="btn btn-success btn-full" style="margin-top: 1.5rem;">
+            <i data-lucide="plus-circle"></i> Lägg till valda stopp i rutt
+          </button>
+        </div>
+        
+      </div>
+    </div>
+  </div>
+
   <!-- Fullscreen HUD Driving Mode Overlay -->
   <div id="hud-overlay" class="hud-overlay-container hide">
     <div class="hud-header">
@@ -402,7 +459,7 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   
   <!-- Main Application Logic -->
-  <script src="app.js?v=18"></script>
+  <script src="app.js?v=20"></script>
   
   <!-- PWA Service Worker Registration -->
   <script>

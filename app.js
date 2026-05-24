@@ -1585,102 +1585,331 @@ function setupEventListeners() {
     });
   }
   
-  // Voice Speech recognition setup & event binding
+  // Voice Speech recognition setup & event binding (Immersive Continuous Modal View)
   const voiceBtn = document.getElementById('voice-stop-btn');
-  let recognition = null;
+  const voiceModal = document.getElementById('voice-modal');
+  const closeVoiceModalBtn = document.getElementById('close-voice-modal-btn');
+  const approveVoiceBtn = document.getElementById('approve-voice-btn');
+  const voiceAddressesList = document.getElementById('voice-addresses-list');
+  const voiceResultCard = document.getElementById('voice-result-card');
+  const voiceStatusText = document.getElementById('voice-status-text');
+  let voiceRecognition = null;
   
-  if (voiceBtn) {
+  // Register global empty checker for voice list removal actions
+  window.checkVoiceListEmpty = () => {
+    const list = document.getElementById('voice-addresses-list');
+    if (list && list.querySelectorAll('.scanned-address-row').length === 0) {
+      list.innerHTML = `
+        <div class="empty-voice-addresses">
+          <i data-lucide="map-pin" style="width:24px;height:24px;opacity:0.5;margin-bottom:8px;"></i>
+          <p>Inga adresser tolkade än. Säg adresser som "Kungsgatan 12 Varberg" eller "Storgatan 5"...</p>
+        </div>
+      `;
+      lucide.createIcons();
+    }
+  };
+  
+  const handleCloseVoiceModal = () => {
+    state.isListeningToVoice = false;
+    if (voiceRecognition) {
+      try { voiceRecognition.stop(); } catch (e) {}
+    }
+    if (voiceModal) {
+      voiceModal.classList.add('hide');
+      voiceModal.classList.remove('voice-active');
+    }
+    document.body.style.overflow = ''; // unlock background scroll
+  };
+
+  if (voiceBtn && voiceModal) {
     if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognition = new SpeechRecognition();
-      recognition.lang = 'sv-SE';
-      recognition.continuous = false;
-      recognition.interimResults = false;
+      voiceRecognition = new SpeechRecognition();
+      voiceRecognition.lang = 'sv-SE';
+      voiceRecognition.continuous = true;
+      voiceRecognition.interimResults = true; // Enabled for real-time Gemini-style stream
       
-      recognition.onstart = () => {
+      voiceRecognition.onstart = () => {
         state.isListeningToVoice = true;
-        voiceBtn.classList.add('listening');
-        voiceBtn.innerHTML = '<i data-lucide="mic-off"></i>';
-        lucide.createIcons();
-        document.getElementById('stop-address-input').placeholder = "🎤 Säg en adress (t.ex. Kungsgatan 12)...";
-      };
-      
-      recognition.onend = () => {
-        if (state.isListeningToVoice) {
-          // Automatic restart for continuous speech entry
-          setTimeout(() => {
-            if (state.isListeningToVoice) {
-              try { recognition.start(); } catch (err) { console.error('Failed to restart voice recognition:', err); }
-            }
-          }, 350);
-        } else {
-          voiceBtn.classList.remove('listening');
-          voiceBtn.innerHTML = '<i data-lucide="mic"></i>';
-          lucide.createIcons();
-          document.getElementById('stop-address-input').placeholder = "Gatunamn (t.ex. Kungsgatan)...";
+        if (voiceStatusText) {
+          voiceStatusText.innerText = "🎤 Lyssnar... Tala på svenska nu.";
+          voiceStatusText.style.color = '#10B981'; // Neongreen when active listening
         }
       };
       
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        if (event.error === 'not-allowed') {
-          alert("Mikrofonbehörighet nekades. Vänligen tillåt mikrofonen i din webbläsare.");
-          state.isListeningToVoice = false;
-          recognition.stop();
-        } else if (event.error === 'aborted') {
-          // Ignore aborted errors since they happen when we call recognition.stop() manually
+      voiceRecognition.onend = () => {
+        if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
+          // Automatic restart for continuous speech entry
+          setTimeout(() => {
+            if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
+              try { voiceRecognition.start(); } catch (err) { console.error('Failed to restart voice recognition:', err); }
+            }
+          }, 350);
         } else {
-          // Restart on other errors if continuous voice is active
-          if (state.isListeningToVoice) {
+          state.isListeningToVoice = false;
+          if (voiceStatusText) {
+            voiceStatusText.innerText = "Avstängd";
+            voiceStatusText.style.color = 'var(--text-secondary)';
+          }
+        }
+      };
+      
+      voiceRecognition.onerror = (event) => {
+        console.error('Voice recognition modal error:', event.error);
+        if (event.error === 'not-allowed') {
+          alert("Mikrofonbehörighet krävs för röstinmatning. Vänligen tillåt mikrofonen i din webbläsare.");
+          handleCloseVoiceModal();
+        } else if (event.error === 'aborted') {
+          // Ignore manual stops
+        } else {
+          if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
             setTimeout(() => {
-              if (state.isListeningToVoice) {
-                try { recognition.start(); } catch (e) {}
+              if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
+                try { voiceRecognition.start(); } catch (e) {}
               }
             }, 500);
           }
         }
       };
       
-      recognition.onresult = async (event) => {
-        const transcript = event.results[0][0].transcript;
-        console.log('Spoken address transcript:', transcript);
+      // Real-time parser to split long continuous speech streams and add checklist rows
+      function extractAndAddAddressFromSegment(text) {
+        console.log('Extracting addresses from final speech segment:', text);
         
-        const parsed = parseSpokenAddress(transcript);
+        // 1. Clean punctuation
+        let cleanText = text.trim().replace(/[\.\?!,]+/g, ' ').replace(/\s+/g, ' ');
         
-        const addressField = document.getElementById('stop-address-input');
-        const numberField = document.getElementById('stop-number-input');
+        // 2. Split by Swedish transition/conjunction words used to chain addresses
+        const splitRegex = /\b(?:och sedan|och sen|sedan|sen|nästa stopp|nästa|stopp|eller|och)\b/gi;
+        const parts = cleanText.split(splitRegex);
         
-        addressField.value = parsed.street;
-        numberField.value = parsed.number;
-        
-        // Visual flash success
-        addressField.style.borderColor = 'var(--success)';
-        numberField.style.borderColor = 'var(--success)';
-        setTimeout(() => {
-          addressField.style.borderColor = '';
-          numberField.style.borderColor = '';
-        }, 800);
-        
-        // Auto-add!
-        await handleAddStop();
-      };
+        parts.forEach(part => {
+          const trimmedPart = part.trim();
+          if (trimmedPart.length < 3) return;
+          
+          // Try to match street + number structure
+          const parsed = parseSpokenAddress(trimmedPart);
+          if (parsed && parsed.street) {
+            const formattedAddress = parsed.number ? `${parsed.street} ${parsed.number}` : parsed.street;
+            
+            // Check for duplicates in the checklist rows
+            const existingInputs = Array.from(voiceAddressesList.querySelectorAll('.address-txt')).map(inp => inp.value.trim().toLowerCase());
+            if (existingInputs.includes(formattedAddress.toLowerCase())) return;
+            
+            // Remove the empty placeholder if present
+            const placeholder = voiceAddressesList.querySelector('.empty-voice-addresses');
+            if (placeholder) {
+              placeholder.remove();
+            }
+            
+            // Generate unique row ID
+            const rowId = `voice-row-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+            const row = document.createElement('div');
+            row.className = 'scanned-address-row';
+            row.style.animation = 'modalOpen 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+            row.innerHTML = `
+              <div class="row-left">
+                <input type="checkbox" checked class="address-chk" id="chk-${rowId}">
+                <i data-lucide="map-pin" class="row-pin-icon text-primary"></i>
+              </div>
+              <input type="text" class="address-txt" value="${formattedAddress}" id="txt-${rowId}" placeholder="Adress...">
+              <button class="btn-remove-row" onclick="this.parentElement.remove(); checkVoiceListEmpty();" title="Ta bort">
+                <i data-lucide="trash-2"></i>
+              </button>
+            `;
+            
+            voiceAddressesList.appendChild(row);
+            lucide.createIcons();
+            
+            // Pulse the section header to provide success feedback
+            const listHeader = voiceResultCard.querySelector('h3');
+            if (listHeader) {
+              listHeader.style.animation = 'pulseGreenText 0.5s ease';
+              setTimeout(() => listHeader.style.animation = '', 500);
+            }
+          }
+        });
+      }
       
-      voiceBtn.addEventListener('click', () => {
-        if (state.isListeningToVoice) {
-          state.isListeningToVoice = false;
-          recognition.stop();
-        } else {
-          state.isListeningToVoice = true;
-          try {
-            recognition.start();
-          } catch (err) {
-            console.error("Failed to start SpeechRecognition:", err);
+      voiceRecognition.onresult = (event) => {
+        let interimTranscript = '';
+        
+        // Loop through all results in the current session
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const segment = event.results[i][0].transcript.trim();
+          if (event.results[i].isFinal) {
+            if (!state.processedVoiceIndices) {
+              state.processedVoiceIndices = new Set();
+            }
+            if (!state.processedVoiceIndices.has(i)) {
+              state.processedVoiceIndices.add(i);
+              if (segment.length >= 3) {
+                state.spokenFinalSegments.push(segment);
+                // Extract and append checklist rows
+                extractAndAddAddressFromSegment(segment);
+              }
+            }
+          } else {
+            interimTranscript += event.results[i][0].transcript;
           }
         }
+        
+        // Render transcript box in real time (glowing words stream)
+        const transcriptDiv = document.getElementById('voice-live-transcript');
+        if (transcriptDiv) {
+          let html = '';
+          state.spokenFinalSegments.forEach(seg => {
+            html += `<span class="transcript-final">${seg} </span>`;
+          });
+          if (interimTranscript) {
+            html += `<span class="transcript-interim">${interimTranscript}...</span>`;
+          }
+          
+          if (!html) {
+            html = `<span class="transcript-placeholder">Börja tala så strömmar orden här i realtid...</span>`;
+          }
+          
+          transcriptDiv.innerHTML = html;
+          transcriptDiv.scrollTop = transcriptDiv.scrollHeight; // Keep scrolled to bottom
+        }
+      };
+      
+      // Trigger voice modal opening on mic click
+      voiceBtn.addEventListener('click', () => {
+        // Clear checklist and show default placeholder
+        voiceAddressesList.innerHTML = `
+          <div class="empty-voice-addresses">
+            <i data-lucide="map-pin" style="width:24px;height:24px;opacity:0.5;margin-bottom:8px;"></i>
+            <p>Inga adresser tolkade än. Säg adresser som "Kungsgatan 12 Varberg" eller "Storgatan 5"...</p>
+          </div>
+        `;
+        lucide.createIcons();
+        
+        // Reset transcript trackers
+        state.spokenFinalSegments = [];
+        state.processedVoiceIndices = new Set();
+        
+        const transcriptDiv = document.getElementById('voice-live-transcript');
+        if (transcriptDiv) {
+          transcriptDiv.innerHTML = `<span class="transcript-placeholder">Börja tala så strömmar orden här i realtid...</span>`;
+        }
+        
+        // Open overlay with voice fullscreen class
+        voiceModal.classList.add('voice-active');
+        voiceModal.classList.remove('hide');
+        document.body.style.overflow = 'hidden'; // lock background scroll
+        
+        state.isListeningToVoice = true;
+        try {
+          voiceRecognition.start();
+        } catch (err) {
+          console.error("Failed to start speech recognition:", err);
+        }
       });
+      
+      if (closeVoiceModalBtn) {
+        closeVoiceModalBtn.addEventListener('click', handleCloseVoiceModal);
+      }
+      
+      // Batch geocoding and stops addition (identical flow to scanned photo stops)
+      if (approveVoiceBtn) {
+        approveVoiceBtn.addEventListener('click', async () => {
+          // Stop recording
+          state.isListeningToVoice = false;
+          try { voiceRecognition.stop(); } catch (e) {}
+          
+          const rows = voiceAddressesList.querySelectorAll('.scanned-address-row');
+          const selectedAddresses = [];
+          
+          rows.forEach(row => {
+            const chk = row.querySelector('.address-chk');
+            const txt = row.querySelector('.address-txt');
+            if (chk && chk.checked && txt && txt.value.trim().length > 0) {
+              selectedAddresses.push({
+                addressText: txt.value.trim(),
+                rowElement: row
+              });
+            }
+          });
+          
+          if (selectedAddresses.length === 0) {
+            alert("Inga adresser valda att spara!");
+            return;
+          }
+          
+          approveVoiceBtn.disabled = true;
+          approveVoiceBtn.innerHTML = `<div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;margin-right:8px;"></div> GEOMAPPAR ADRESSER...`;
+          
+          let successCount = 0;
+          let hasErrors = false;
+          
+          // Batch geocode all in parallel
+          const geocodePromises = selectedAddresses.map(async (item) => {
+            // Remove previous error markings
+            item.rowElement.classList.remove('geocode-error');
+            const txtInput = item.rowElement.querySelector('.address-txt');
+            if (txtInput) {
+              txtInput.style.color = '';
+              txtInput.style.borderColor = '';
+            }
+            
+            try {
+              // Run searchAddress with Sweden country code constraint
+              const results = await searchAddress(item.addressText, true);
+              if (results.length > 0) {
+                const newStop = {
+                  id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                  address: results[0].address,
+                  lat: results[0].lat,
+                  lng: results[0].lng,
+                  duration: state.globalDuration,
+                  status: 'pending'
+                };
+                state.stops.push(newStop);
+                successCount++;
+                
+                // Color green for visual success feedback
+                item.rowElement.style.borderColor = 'var(--success)';
+                item.rowElement.style.background = 'rgba(16, 185, 129, 0.1)';
+                
+                // Uncheck so they are not saved again on retry
+                const chk = item.rowElement.querySelector('.address-chk');
+                if (chk) chk.checked = false;
+              } else {
+                throw new Error("Geocoding failed");
+              }
+            } catch (err) {
+              hasErrors = true;
+              item.rowElement.classList.add('geocode-error');
+              if (txtInput) {
+                txtInput.style.color = '#FCA5A5';
+                txtInput.style.borderColor = 'var(--danger)';
+              }
+            }
+          });
+          
+          await Promise.all(geocodePromises);
+          
+          approveVoiceBtn.disabled = false;
+          approveVoiceBtn.innerHTML = `<i data-lucide="plus-circle"></i> Lägg till valda stopp i rutt`;
+          lucide.createIcons();
+          
+          if (successCount > 0) {
+            saveStateToStorage();
+            renderStopsList();
+            calculateRoute(false);
+          }
+          
+          if (!hasErrors) {
+            handleCloseVoiceModal();
+          } else {
+            alert("Vissa adresser kunde inte hittas på kartan. Kontrollera och rätta stavningen på de rödmarkerade fälten direkt i rutorna, och klicka sedan på spara igen!");
+          }
+        });
+      }
     } else {
       voiceBtn.addEventListener('click', () => {
-        alert("Röstinmatning stöds inte i din nuvarande webbläsare. Använd Google Chrome eller Safari på din mobil för röstinmatning!");
+        alert("Röstinmatning stöds inte i din nuvarande webbläsare. Använd Google Chrome eller Safari på din mobil!");
       });
     }
   }
