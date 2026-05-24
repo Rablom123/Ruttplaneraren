@@ -17,7 +17,8 @@ const state = {
   zoomFactor: 1.0,    // Digital camera zoom scale factor
   availableCameras: [], // Discovered back-facing video input devices
   currentCameraIndex: 0, // Currently active camera index in list
-  defaultCity: ''      // Default city to append to typed or scanned addresses
+  defaultCity: '',      // Default city to append to typed or scanned addresses
+  isListeningToVoice: false // Track voice recognition microphone status
 };
 
 // Leaflet Map Globals
@@ -1284,6 +1285,50 @@ function bindAutocomplete(inputId, dropdownId, onSelectCallback, isStop = false)
   });
 }
 
+// Parse Swedish spoken address string into street and house number fields
+function parseSpokenAddress(text) {
+  let cleanText = text.trim();
+  
+  // Clean trailing punctuation
+  cleanText = cleanText.replace(/[\.\?!,]+$/, '').trim();
+  
+  // Replace spoken words like "nummer" or "nr" for high-accuracy splitting
+  cleanText = cleanText.replace(/\b(nummer|nr)\b/gi, '').replace(/\s+/g, ' ').trim();
+  
+  // Capitalize words nicely in Title Case
+  cleanText = cleanText.toLowerCase().replace(/\b[a-zåäöéèüïäåæø]/gi, char => char.toUpperCase());
+  
+  // Swedish address matching regex:
+  // e.g. "Kungsgatan 12 Varberg" or "Sveavägen 44 B"
+  // Group 1: Street Name (e.g. "Kungsgatan", "Västra Hamngatan")
+  // Group 2: House Number (e.g. "12", "44 B", "12a")
+  // Group 3: Optional City Name at the end (e.g. "Varberg", "Göteborg")
+  const addressRegex = /^([A-ZÅÄÖa-zåäöéèüïäå\-\s]{3,})\s+(\d+\s*[A-Za-zåäöÅÄÖ]?)\b(?:\s+([A-ZÅÄÖa-zåäöéèüïäå\-\s]{3,}))?$/i;
+  const match = cleanText.match(addressRegex);
+  
+  if (match) {
+    const street = match[1].trim();
+    const number = match[2].trim();
+    const city = match[3] ? match[3].trim() : "";
+    
+    let finalStreet = street;
+    if (city) {
+      finalStreet = `${street}, ${city}`;
+    }
+    
+    return {
+      street: finalStreet,
+      number: number
+    };
+  }
+  
+  // Fallback if no house numbers are found in spoken speech (e.g., just "Kungsgatan")
+  return {
+    street: cleanText,
+    number: ""
+  };
+}
+
 // Stop WebRTC camera stream and reset viewport states
 function stopCameraStream() {
   if (state.cameraStream) {
@@ -1538,6 +1583,106 @@ function setupEventListeners() {
         handleAddStop();
       }
     });
+  }
+  
+  // Voice Speech recognition setup & event binding
+  const voiceBtn = document.getElementById('voice-stop-btn');
+  let recognition = null;
+  
+  if (voiceBtn) {
+    if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.lang = 'sv-SE';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      
+      recognition.onstart = () => {
+        state.isListeningToVoice = true;
+        voiceBtn.classList.add('listening');
+        voiceBtn.innerHTML = '<i data-lucide="mic-off"></i>';
+        lucide.createIcons();
+        document.getElementById('stop-address-input').placeholder = "🎤 Säg en adress (t.ex. Kungsgatan 12)...";
+      };
+      
+      recognition.onend = () => {
+        if (state.isListeningToVoice) {
+          // Automatic restart for continuous speech entry
+          setTimeout(() => {
+            if (state.isListeningToVoice) {
+              try { recognition.start(); } catch (err) { console.error('Failed to restart voice recognition:', err); }
+            }
+          }, 350);
+        } else {
+          voiceBtn.classList.remove('listening');
+          voiceBtn.innerHTML = '<i data-lucide="mic"></i>';
+          lucide.createIcons();
+          document.getElementById('stop-address-input').placeholder = "Gatunamn (t.ex. Kungsgatan)...";
+        }
+      };
+      
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'not-allowed') {
+          alert("Mikrofonbehörighet nekades. Vänligen tillåt mikrofonen i din webbläsare.");
+          state.isListeningToVoice = false;
+          recognition.stop();
+        } else if (event.error === 'aborted') {
+          // Ignore aborted errors since they happen when we call recognition.stop() manually
+        } else {
+          // Restart on other errors if continuous voice is active
+          if (state.isListeningToVoice) {
+            setTimeout(() => {
+              if (state.isListeningToVoice) {
+                try { recognition.start(); } catch (e) {}
+              }
+            }, 500);
+          }
+        }
+      };
+      
+      recognition.onresult = async (event) => {
+        const transcript = event.results[0][0].transcript;
+        console.log('Spoken address transcript:', transcript);
+        
+        const parsed = parseSpokenAddress(transcript);
+        
+        const addressField = document.getElementById('stop-address-input');
+        const numberField = document.getElementById('stop-number-input');
+        
+        addressField.value = parsed.street;
+        numberField.value = parsed.number;
+        
+        // Visual flash success
+        addressField.style.borderColor = 'var(--success)';
+        numberField.style.borderColor = 'var(--success)';
+        setTimeout(() => {
+          addressField.style.borderColor = '';
+          numberField.style.borderColor = '';
+        }, 800);
+        
+        // Auto-add!
+        await handleAddStop();
+      };
+      
+      voiceBtn.addEventListener('click', () => {
+        if (state.isListeningToVoice) {
+          state.isListeningToVoice = false;
+          recognition.stop();
+        } else {
+          state.isListeningToVoice = true;
+          try {
+            recognition.start();
+          } catch (err) {
+            console.error("Failed to start SpeechRecognition:", err);
+          }
+        }
+      });
+    } else {
+      voiceBtn.addEventListener('click', () => {
+        alert("Röstinmatning stöds inte i din nuvarande webbläsare. Använd Google Chrome eller Safari på din mobil för röstinmatning!");
+      });
+    }
   }
   
   // 3. Optimize Buttons & Clear Routings

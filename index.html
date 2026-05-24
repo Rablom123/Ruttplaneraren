@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   
   <!-- Main Stylesheet -->
-  <link rel="stylesheet" href="styles.css?v=17">
+  <link rel="stylesheet" href="styles.css?v=18">
   
   <!-- Icons via Lucide (modern icon library) -->
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -162,6 +162,9 @@
             <div class="input-number-field">
               <input type="text" id="stop-number-input" placeholder="Nr (t.ex. 12 B)..." inputmode="numeric" enterkeyhint="done">
             </div>
+            <button id="voice-stop-btn" class="btn btn-secondary btn-icon-only voice-btn" title="Röstinmatning">
+              <i data-lucide="mic"></i>
+            </button>
             <button id="search-stop-btn" class="btn btn-primary btn-icon-only" title="Sök adress">
               <i data-lucide="search"></i>
             </button>
@@ -399,7 +402,7 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   
   <!-- Main Application Logic -->
-  <script src="app.js?v=17"></script>
+  <script src="app.js?v=18"></script>
   
   <!-- PWA Service Worker Registration -->
   <script>

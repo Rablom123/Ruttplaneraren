@@ -1966,3 +1966,30 @@ input[type="number"]:focus {
   flex: 1 !important; /* Gatunummer takes ~24% */
   min-width: 82px !important;
 }
+
+/* Premium voice input mic button styles */
+.voice-btn {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+  transition: all 0.3s ease !important;
+}
+
+.voice-btn:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: white !important;
+}
+
+.voice-btn.listening {
+  background: rgba(239, 68, 68, 0.25) !important;
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  color: #EF4444 !important;
+  animation: voicePulse 1.5s infinite ease-in-out !important;
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.4) !important;
+}
+
+@keyframes voicePulse {
+  0% { transform: scale(1); box-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
+  50% { transform: scale(1.08); box-shadow: 0 0 18px rgba(239, 68, 68, 0.7); }
+  100% { transform: scale(1); box-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
+}
