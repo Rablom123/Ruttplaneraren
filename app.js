@@ -5,7 +5,7 @@
 // Application State
 const state = {
   warehouse: null, // { address: '', lat: 0, lng: 0 }
-  stops: [],       // Array of: { id: '', address: '', lat: 0, lng: 0, duration: 4, status: 'pending'|'delivered'|'failed' }
+  stops: [],       // Array of: { id: '', address: '', lat: 0, lng: 0, duration: 4, status: 'pending'|'delivered'|'failed', isPinnedStart: false, isPinnedEnd: false }
   routeOrder: [],  // Array of stop indices (representing sequence including warehouse)
   routeGeometry: null,
   routeDistance: 0, // meters
@@ -13,12 +13,7 @@ const state = {
   globalDuration: 4, // default minutes per stop
   hudActiveIndex: -1, // active stop index in HUD mode
   isHUDActive: false,
-  cameraStream: null, // WebRTC live camera stream tracker
-  zoomFactor: 1.0,    // Digital camera zoom scale factor
-  availableCameras: [], // Discovered back-facing video input devices
-  currentCameraIndex: 0, // Currently active camera index in list
-  defaultCity: '',      // Default city to append to typed or scanned addresses
-  isListeningToVoice: false // Track voice recognition microphone status
+  defaultCity: ''      // Default city to append to typed or scanned addresses
 };
 
 // Leaflet Map Globals
@@ -45,8 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Setup Event Listeners
   setupEventListeners();
   
-  // Pre-load Tesseract Worker to make scanning fast
-  initOCR();
+  // Pre-load OCR and other components removed
   
   // Render Initial View
   renderWarehouse();
@@ -71,7 +65,11 @@ function loadStateFromStorage() {
   
   const savedStops = localStorage.getItem('rm_stops');
   if (savedStops) {
-    state.stops = JSON.parse(savedStops);
+    state.stops = JSON.parse(savedStops).map(s => ({
+      ...s,
+      isPinnedStart: !!s.isPinnedStart,
+      isPinnedEnd: !!s.isPinnedEnd
+    }));
   }
   
   const savedGlobalDuration = localStorage.getItem('rm_global_duration');
@@ -315,15 +313,37 @@ async function searchAddress(query, isStop = false) {
 
 // ==========================================================================
 // 4. TSP ROUTE OPTIMIZATION (2-OPT ALGORITHM)
-// ==========================================================================
+// ============================// Fetch current GPS location with high accuracy and a 5-second timeout fallback
+function getCurrentGPSPosition() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      console.warn("GPS stöds inte av din webbläsare.");
+      resolve(null);
+      return;
+    }
+    
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude
+        });
+      },
+      (err) => {
+        console.warn("GPS-hämtning misslyckades eller nekades:", err);
+        resolve(null);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 0
+      }
+    );
+  });
+}
 
-// Solve Traveling Salesperson Problem (TSP) using OSRM Distance Matrix
+// Solve Traveling Salesperson Problem (TSP) using OSRM Distance Matrix starting from GPS position
 async function calculateRoute(shouldOptimize = true) {
-  if (!state.warehouse) {
-    alert("Vänligen ställ in lagrets adress först!");
-    return;
-  }
-  
   if (state.stops.length === 0) {
     // Just show warehouse
     updateMapMarkers();
@@ -349,30 +369,84 @@ async function calculateRoute(shouldOptimize = true) {
   showLoader(true);
 
   try {
-    // If we only have 1 stop, routing is simple: Warehouse -> Stop 1 -> Warehouse
+    // 1. Get current GPS position or fallback to warehouse
+    let startPoint = null;
+    if (shouldOptimize) {
+      startPoint = await getCurrentGPSPosition();
+      if (startPoint) {
+        console.log("GPS-position hämtad framgångsrikt:", startPoint);
+      } else {
+        console.log("Kunde inte hämta GPS-position, använder lagret som startpunkt.");
+      }
+    }
+    
+    // Fallback to warehouse if GPS failed or not optimizing
+    if (!startPoint) {
+      startPoint = state.warehouse;
+    }
+
+    if (!startPoint) {
+      alert("Hittade ingen startposition! Vänligen ställ in lagrets adress eller tillåt GPS-delning i webbläsaren.");
+      showLoader(false);
+      return;
+    }
+
+    // If we only have 1 stop, routing is simple: StartPoint -> Stop 1 -> Warehouse (or StartPoint if no warehouse)
     if (state.stops.length === 1) {
-      await fetchDirectRoute([state.warehouse, state.stops[0], state.warehouse]);
+      const endPt = state.warehouse || startPoint;
+      await fetchDirectRoute([startPoint, state.stops[0], endPt]);
       showLoader(false);
       return;
     }
 
     // Determine stop order
-    let sortedStops = [...state.stops];
+    if (shouldOptimize && state.stops.length > 1) {
+      // 2. Identify startPoint, pinnedStart, pinnedEnd, and endPoint
+      const pinnedStartStop = state.stops.find(s => s.isPinnedStart);
+      const pinnedEndStop = state.stops.find(s => s.isPinnedEnd);
+      
+      // Free stops are all stops that are NOT pinned start or pinned end
+      const freeStops = state.stops.filter(s => !s.isPinnedStart && !s.isPinnedEnd);
 
-    if (shouldOptimize) {
-      // 1. Fetch the duration matrix from OSRM between all locations (Warehouse is index 0)
-      const locations = [state.warehouse, ...state.stops];
+      // Endpoint is state.warehouse if it exists, otherwise the last stop
+      const endPoint = state.warehouse || state.stops[state.stops.length - 1];
+
+      // 3. Construct locations array for matrix calculation
+      // Format: [StartPoint, PinnedStart (if exists), ...FreeStops, PinnedEnd (if exists), EndPoint]
+      const locations = [startPoint];
+      if (pinnedStartStop) locations.push(pinnedStartStop);
+      locations.push(...freeStops);
+      if (pinnedEndStop) locations.push(pinnedEndStop);
+      locations.push(endPoint);
+
+      // 4. Fetch the travel durations from OSRM between all locations
       const matrix = await fetchOSRMDurationMatrix(locations);
       
-      // 2. Solve the TSP using 2-opt heuristic
-      const optimalIndicesOrder = solveTSP2Opt(matrix);
+      // 5. Solve the constrained TSP
+      const optimalIndicesOrder = solveTSP2OptConstrained(matrix, !!pinnedStartStop, !!pinnedEndStop);
       
-      // 3. Reorder stops in our state to match optimized order (excluding warehouse at start/end)
-      // optimalIndicesOrder will be [0, p1, p2, ..., 0]. We want stops sorted by p1, p2, ...
+      // 6. Reassemble stops order based on optimalIndicesOrder
       const optimizedStops = [];
+      
+      // First is the pinned start stop, if it exists
+      if (pinnedStartStop) {
+        optimizedStops.push(pinnedStartStop);
+      }
+      
+      // Then the free stops in their optimized order
+      const firstFreeLocIdx = pinnedStartStop ? 2 : 1;
+      
       for (let i = 1; i < optimalIndicesOrder.length - 1; i++) {
-        const stopIndexInStops = optimalIndicesOrder[i] - 1;
-        optimizedStops.push(state.stops[stopIndexInStops]);
+        const locIdx = optimalIndicesOrder[i];
+        if (locIdx >= firstFreeLocIdx && locIdx < firstFreeLocIdx + freeStops.length) {
+          const freeStopIdx = locIdx - firstFreeLocIdx;
+          optimizedStops.push(freeStops[freeStopIdx]);
+        }
+      }
+      
+      // Finally, the pinned end stop, if it exists
+      if (pinnedEndStop) {
+        optimizedStops.push(pinnedEndStop);
       }
       
       state.stops = optimizedStops;
@@ -380,13 +454,15 @@ async function calculateRoute(shouldOptimize = true) {
       renderStopsList();
     }
 
-    // 4. Get the detailed path geometry for the sorted sequence
-    const routeCoords = [state.warehouse, ...state.stops, state.warehouse];
+    // 7. Get the detailed path geometry for the sorted sequence
+    const routeCoords = [startPoint, ...state.stops];
+    if (state.warehouse) {
+      routeCoords.push(state.warehouse);
+    }
     await fetchDirectRoute(routeCoords);
     
   } catch (error) {
     console.error("Optimization failed, doing fallback estimation:", error);
-    // Offline/Rate limit fallback
     runFallbackRouting();
   } finally {
     showLoader(false);
@@ -405,20 +481,29 @@ async function fetchOSRMDurationMatrix(locations) {
   return data.durations; // 2D matrix of travel times in seconds
 }
 
-// TSP Solver (2-Opt Heuristic)
-// Starts at 0, visits all points once, returns to 0, minimizing sum of driving times
-function solveTSP2Opt(matrix) {
-  const n = matrix.length; // total nodes (1 warehouse + N stops)
+// TSP Solver (Constrained 2-Opt Heuristic)
+function solveTSP2OptConstrained(matrix, hasPinnedStart, hasPinnedEnd) {
+  const n = matrix.length;
   
-  // Start with a greedy nearest-neighbor tour
+  const firstFreeIdx = hasPinnedStart ? 2 : 1;
+  const lastFreeIdx = hasPinnedEnd ? n - 3 : n - 2;
+  
+  // Initial tour: startPoint (0) -> pinnedStart (1, if exists) -> greedy free stops -> pinnedEnd (n-2, if exists) -> endPoint (n-1)
   let bestTour = [0];
-  let unvisited = new Set(Array.from({ length: n - 1 }, (_, i) => i + 1));
+  if (hasPinnedStart) {
+    bestTour.push(1);
+  }
   
-  let current = 0;
+  // Greedy nearest-neighbor tour for the free stops
+  const unvisited = new Set();
+  for (let i = firstFreeIdx; i <= lastFreeIdx; i++) {
+    unvisited.add(i);
+  }
+  
+  let current = hasPinnedStart ? 1 : 0;
   while (unvisited.size > 0) {
     let nearest = -1;
     let minDistance = Infinity;
-    
     for (let candidate of unvisited) {
       const dist = matrix[current][candidate];
       if (dist < minDistance) {
@@ -426,13 +511,16 @@ function solveTSP2Opt(matrix) {
         nearest = candidate;
       }
     }
-    
     bestTour.push(nearest);
     unvisited.delete(nearest);
     current = nearest;
   }
-  bestTour.push(0); // return to warehouse
-
+  
+  if (hasPinnedEnd) {
+    bestTour.push(n - 2);
+  }
+  bestTour.push(n - 1); // endPoint
+  
   // Calculate total duration of a tour
   const getTourCost = (tour) => {
     let cost = 0;
@@ -441,24 +529,20 @@ function solveTSP2Opt(matrix) {
     }
     return cost;
   };
-
+  
   let bestCost = getTourCost(bestTour);
   let improved = true;
-
-  // Run 2-opt swaps iteratively
   let attempts = 0;
-  const maxAttempts = 500; // prevent endless loop
+  const maxAttempts = 500;
   
   while (improved && attempts < maxAttempts) {
     improved = false;
     attempts++;
     
-    // We cannot swap warehouse indices at start (0) or end (length - 1)
-    for (let i = 1; i < n - 1; i++) {
-      for (let j = i + 1; j < n; j++) {
-        // Swap segment from i to j
+    // We only swap indices between firstFreeIdx and lastFreeIdx (inclusive)
+    for (let i = firstFreeIdx; i < lastFreeIdx; i++) {
+      for (let j = i + 1; j <= lastFreeIdx; j++) {
         const newTour = [...bestTour];
-        // Reverse subsegment in place
         reverseSubsegment(newTour, i, j);
         
         const newCost = getTourCost(newTour);
@@ -470,7 +554,7 @@ function solveTSP2Opt(matrix) {
       }
     }
   }
-
+  
   return bestTour;
 }
 
@@ -479,6 +563,11 @@ function reverseSubsegment(arr, i, j) {
   while (i < j) {
     const temp = arr[i];
     arr[i] = arr[j];
+    arr[j] = temp;
+    i++;
+    j--;
+  }
+}= arr[j];
     arr[j] = temp;
     i++;
     j--;
@@ -562,280 +651,7 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
   return R * c; // in meters
 }
 
-// ==========================================================================
-// 5. OCR ADDRESS SCANNER & LABEL CREATION (TESSERACT.JS)
-// ==========================================================================
-
-function initOCR() {
-  console.log("OCR engine initialized.");
-}
-
-// Helper to draw a modern mock shipping label onto the canvas
-function generateMockLabelCanvas() {
-  const canvas = document.getElementById('label-canvas');
-  if (!canvas) return;
-  
-  canvas.width = 400;
-  canvas.height = 300;
-  const ctx = canvas.getContext('2d');
-  
-  // Background
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
-  // Border
-  ctx.strokeStyle = '#000000';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-  
-  // Header Logo / Company
-  ctx.fillStyle = '#000000';
-  ctx.font = '800 16px Outfit, Arial, sans-serif';
-  ctx.fillText('⚡ POSTNORD EXPRESS', 25, 40);
-  
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(20, 50);
-  ctx.lineTo(380, 50);
-  ctx.stroke();
-  
-  // Delivery details title
-  ctx.font = 'bold 10px Arial, sans-serif';
-  ctx.fillText('LEVERANSMOTTAGARE (SHIP TO):', 25, 75);
-  
-  // Generate random Swedish address for testing
-  const mockAddresses = [
-    { name: 'Kalle Karlsson', street: 'Sveavägen 44', zip: '111 34', city: 'Stockholm' },
-    { name: 'Erik Johansson', street: 'Kungsgatan 12', zip: '111 43', city: 'Stockholm' },
-    { name: 'Sven Svensson', street: 'Vasagatan 8', zip: '411 08', city: 'Göteborg' },
-    { name: 'Johanna Berg', street: 'Drottninggatan 30', zip: '111 51', city: 'Stockholm' },
-    { name: 'Lars Larsson', street: 'Odengatan 56', zip: '113 22', city: 'Stockholm' }
-  ];
-  
-  const chosen = mockAddresses[Math.floor(Math.random() * mockAddresses.length)];
-  
-  // Recipient details inside manifest
-  ctx.font = '800 18px Arial, sans-serif';
-  ctx.fillText(chosen.name.toUpperCase(), 25, 105);
-  ctx.fillText(chosen.street.toUpperCase(), 25, 130);
-  ctx.fillText(`${chosen.zip} ${chosen.city.toUpperCase()}`, 25, 155);
-  
-  // Horizontal divider
-  ctx.beginPath();
-  ctx.moveTo(20, 175);
-  ctx.lineTo(380, 175);
-  ctx.stroke();
-  
-  // Package ID / barcode fake lines
-  ctx.font = 'bold 9px Arial, sans-serif';
-  ctx.fillText('FRAKTSEDELNUMMER (TRACKING ID):', 25, 195);
-  ctx.font = '12px Courier, monospace';
-  ctx.fillText(`SE-${Math.floor(10000 + Math.random() * 90000)}-DK`, 25, 215);
-  
-  // Barcode visualization
-  ctx.fillStyle = '#000000';
-  let startX = 25;
-  const barcodeY = 230;
-  const barcodeHeight = 45;
-  
-  for (let i = 0; i < 40; i++) {
-    const width = Math.random() > 0.4 ? 4 : 2;
-    const spacing = Math.random() > 0.4 ? 3 : 1;
-    ctx.fillRect(startX, barcodeY, width, barcodeHeight);
-    startX += width + spacing;
-    if (startX > 370) break;
-  }
-  
-  // Show Canvas
-  canvas.classList.remove('hide');
-  document.querySelector('.preview-placeholder-icon').classList.add('hide');
-  document.querySelector('.scan-preview-container p').classList.add('hide');
-}
-
-// Perform OCR Recognition via Tesseract.js
-async function runOCRScan(imageSource) {
-  const loader = document.getElementById('ocr-loader');
-  const resultCard = document.getElementById('scan-result-card');
-  const laser = document.querySelector('.scan-laser');
-  
-  loader.classList.remove('hide');
-  resultCard.classList.add('hide');
-  laser.style.display = 'block'; // animate laser
-  
-  try {
-    // Run client-side OCR
-    const result = await Tesseract.recognize(imageSource, 'swe', {
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          document.getElementById('ocr-loader-text').innerText = `Läser av adressen: ${Math.round(m.progress * 100)}%`;
-        }
-      }
-    });
-    
-    laser.style.display = 'none'; // stop laser
-    loader.classList.add('hide');
-    
-    const text = result.data.text;
-    console.log("OCR Text Detected:", text);
-    
-    // Parse multiple addresses from OCR text
-    const detectedAddresses = parseAddressesFromText(text);
-    
-    const listContainer = document.getElementById('scanned-addresses-list');
-    listContainer.innerHTML = '';
-    
-    if (detectedAddresses.length === 0) {
-      // Fallback row
-      const row = document.createElement('div');
-      row.className = 'scanned-address-row';
-      row.innerHTML = `
-        <input type="checkbox" checked class="address-chk">
-        <input type="text" class="address-txt" value="" placeholder="Kunde inte tyda adresser. Skriv manuellt...">
-      `;
-      listContainer.appendChild(row);
-    } else {
-      // Create checklist for each scanned address
-      detectedAddresses.forEach((addr, idx) => {
-        const row = document.createElement('div');
-        row.className = 'scanned-address-row';
-        row.innerHTML = `
-          <input type="checkbox" checked class="address-chk" id="addr-chk-${idx}">
-          <input type="text" class="address-txt" value="${addr}" id="addr-txt-${idx}" placeholder="Adress...">
-        `;
-        listContainer.appendChild(row);
-      });
-    }
-    
-    // Update count title
-    const count = detectedAddresses.length;
-    const titleElement = document.getElementById('scan-result-title');
-    if (count > 1) {
-      titleElement.innerHTML = `<i data-lucide="check-circle-2" class="text-success"></i> ${count} adresser identifierade!`;
-    } else if (count === 1) {
-      titleElement.innerHTML = `<i data-lucide="check-circle-2" class="text-success"></i> Adress identifierad!`;
-    } else {
-      titleElement.innerHTML = `<i data-lucide="alert-triangle" class="text-warning"></i> Skriv in adress manuellt`;
-    }
-    
-    document.getElementById('scanned-duration-input').value = state.globalDuration;
-    
-    // Re-trigger Lucide icon renders
-    lucide.createIcons();
-    resultCard.classList.remove('hide');
-  } catch (error) {
-    console.error("OCR Scan failed:", error);
-    laser.style.display = 'none';
-    loader.classList.add('hide');
-    alert("Kunde inte läsa av bilden. Vänligen skriv in adressen manuellt.");
-  }
-}
-
-// Custom parser to extract multiple Swedish address lines while ignoring noise
-function parseAddressesFromText(text) {
-  // Split into lines, trim, and filter out completely empty lines
-  const lines = text.split('\n')
-    .map(l => {
-      let clean = l.trim();
-      // Strip leading stop numbers, bullets, labels, etc. (common in Bring manifest lists)
-      clean = clean.replace(/^(stopp\s*\d+[:\-\s]*|[\d\.\-•:]+\s*|adress[:\-\s]*|gata[:\-\s]*|mottagaradress[:\-\s]*|leveransadress[:\-\s]*)/i, '');
-      return clean.trim();
-    })
-    .filter(l => l.length > 2);
-    
-  // Blacklist words that commonly appear on shipping labels as noise
-  const blacklist = [
-    'postnord', 'express', 'varubrev', 'mypack', 'collect', 'dhl', 'schenker', 'ups', 'fedex',
-    'vikt', 'weight', ' kg', ' kolli', 'paket', 'frakt', 'tracking', 'sändning', 'order',
-    'referens', ' ref', 'mottagare', 'avsändare', 'sender', 'receiver', 'ship to', 'from',
-    'tel', 'mobil', 'phone', 'e-post', 'email', 'retur', 'undeliverable', 'barcode', 'co2'
-  ];
-  
-  // Standard Swedish street name + house number regex:
-  // Must start with a street name (letters, spaces, dashes), followed by a house number (digits + optional letter like 12, 44A, 12 B)
-  const streetRegex = /^([A-ZÅÄÖa-zåäöéèüïäå\-\s]{3,})\s+(\d+\s*[A-Za-zåäöÅÄÖ]?)\b/i;
-  
-  // Standard Swedish Zip Code + City regex:
-  // E.g. "111 34 Stockholm" or "11134 Stockholm" or "41108 GÖTEBORG"
-  const zipCityRegex = /\b(\d{3})\s*(\d{2})\s+([A-ZÅÄÖa-zåäöé\-\s]{3,})\b/i;
-  
-  const foundAddresses = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // Check if line contains any blacklisted noise words
-    const containsBlacklist = blacklist.some(term => line.toLowerCase().includes(term));
-    if (containsBlacklist) continue;
-    
-    // Check if line matches a street address structure
-    if (streetRegex.test(line)) {
-      const streetMatch = line.match(streetRegex)[0].trim();
-      let cityPart = "";
-      
-      // Look at the current line or the next 2 lines for a Zip + City line
-      for (let offset = 0; offset <= 2; offset++) {
-        const targetIdx = i + offset;
-        if (targetIdx < lines.length) {
-          const targetLine = lines[targetIdx];
-          // Don't check target lines if they are blacklisted
-          if (blacklist.some(term => targetLine.toLowerCase().includes(term))) continue;
-          
-          if (zipCityRegex.test(targetLine)) {
-            const match = targetLine.match(zipCityRegex);
-            const zip = `${match[1]} ${match[2]}`;
-            const city = match[3].trim();
-            cityPart = `${zip} ${city}`;
-            break;
-          }
-        }
-      }
-      
-      // Assemble the final address string
-      let fullAddress = streetMatch;
-      if (cityPart) {
-        fullAddress = `${streetMatch}, ${cityPart}`;
-      }
-      
-      // Clean and capitalize each word nicely (e.g. "SVEAVÄGEN 44" -> "Sveavägen 44")
-      const cleanAddress = fullAddress
-        .replace(/\b([A-ZÅÄÖa-zåäöéèüïäå]+)\b/g, word => {
-          // If word is a zip code, keep it as digits
-          if (/^\d+$/.test(word)) return word;
-          return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-        })
-        .replace(/\s+/g, ' ');
-        
-      if (!foundAddresses.includes(cleanAddress)) {
-        foundAddresses.push(cleanAddress);
-      }
-    }
-  }
-  
-  // Fallback: If no street + zip combinations were found,
-  // let's grab lines that strictly match the streetRegex on their own (without zip code)
-  if (foundAddresses.length === 0) {
-    for (let line of lines) {
-      const containsBlacklist = blacklist.some(term => line.toLowerCase().includes(term));
-      if (containsBlacklist) continue;
-      
-      if (streetRegex.test(line)) {
-        const streetMatch = line.match(streetRegex)[0].trim();
-        // Capitalize nicely
-        const cleanAddress = streetMatch
-          .replace(/\b([A-ZÅÄÖa-zåäöéèüïäå]+)\b/g, word => {
-            if (/^\d+$/.test(word)) return word;
-            return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-          });
-          
-        if (!foundAddresses.includes(cleanAddress)) {
-          foundAddresses.push(cleanAddress);
-        }
-      }
-    }
-  }
-  
-  return foundAddresses;
-}
+// OCR Address Scanner functions removed
 
 // ==========================================================================
 // 6. DASHBOARD & RENDER FUNCTIONS
@@ -956,7 +772,12 @@ function renderStopsList() {
   
   state.stops.forEach((stop, index) => {
     const li = document.createElement('li');
-    li.className = `stop-item ${stop.status}`;
+    
+    let pinnedClass = '';
+    if (stop.isPinnedStart) pinnedClass = 'pinned-start';
+    else if (stop.isPinnedEnd) pinnedClass = 'pinned-end';
+    
+    li.className = `stop-item ${stop.status} ${pinnedClass}`;
     li.draggable = true;
     li.dataset.id = stop.id;
     li.dataset.index = index;
@@ -973,6 +794,14 @@ function renderStopsList() {
           <div class="stop-duration-tag">
             <i data-lucide="clock"></i>
             <input type="number" class="stop-dur-edit" value="${stop.duration}" min="1" max="120" data-id="${stop.id}"> min
+          </div>
+          <div class="pin-actions-group">
+            <button class="btn-pin-toggle pin-start ${stop.isPinnedStart ? 'active' : ''}" data-id="${stop.id}" title="Fäst som startstopp">
+              <i data-lucide="anchor"></i> Startstopp
+            </button>
+            <button class="btn-pin-toggle pin-end ${stop.isPinnedEnd ? 'active' : ''}" data-id="${stop.id}" title="Fäst som slutstopp">
+              <i data-lucide="flag"></i> Slutstopp
+            </button>
           </div>
         </div>
       </div>
@@ -1095,6 +924,50 @@ function bindDynamicListInputs() {
         if (state.isHUDActive && state.hudActiveIndex !== -1) {
           renderHUDActiveStop();
         }
+      }
+    });
+  });
+
+  // Pin Start Toggle
+  document.querySelectorAll('.pin-start').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      const stop = state.stops.find(s => s.id === id);
+      if (stop) {
+        const currentVal = !!stop.isPinnedStart;
+        // Clear other start pins
+        state.stops.forEach(s => s.isPinnedStart = false);
+        // Toggle this stop
+        stop.isPinnedStart = !currentVal;
+        // If it becomes start pin, it cannot be end pin
+        if (stop.isPinnedStart) {
+          stop.isPinnedEnd = false;
+        }
+        saveStateToStorage();
+        renderStopsList();
+        calculateRoute(false);
+      }
+    });
+  });
+
+  // Pin End Toggle
+  document.querySelectorAll('.pin-end').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      const stop = state.stops.find(s => s.id === id);
+      if (stop) {
+        const currentVal = !!stop.isPinnedEnd;
+        // Clear other end pins
+        state.stops.forEach(s => s.isPinnedEnd = false);
+        // Toggle this stop
+        stop.isPinnedEnd = !currentVal;
+        // If it becomes end pin, it cannot be start pin
+        if (stop.isPinnedEnd) {
+          stop.isPinnedStart = false;
+        }
+        saveStateToStorage();
+        renderStopsList();
+        calculateRoute(false);
       }
     });
   });
@@ -1303,92 +1176,7 @@ function bindAutocomplete(inputId, dropdownId, onSelectCallback, isStop = false)
   });
 }
 
-// Parse Swedish spoken address string into street and house number fields
-function parseSpokenAddress(text) {
-  let cleanText = text.trim();
-  
-  // Clean trailing punctuation
-  cleanText = cleanText.replace(/[\.\?!,]+$/, '').trim();
-  
-  // Replace spoken words like "nummer" or "nr" for high-accuracy splitting
-  cleanText = cleanText.replace(/\b(nummer|nr)\b/gi, '').replace(/\s+/g, ' ').trim();
-  
-  // Capitalize words nicely in Title Case
-  cleanText = cleanText.toLowerCase().replace(/\b[a-zåäöéèüïäåæø]/gi, char => char.toUpperCase());
-  
-  // Swedish address matching regex:
-  // e.g. "Kungsgatan 12 Varberg" or "Sveavägen 44 B"
-  // Group 1: Street Name (e.g. "Kungsgatan", "Västra Hamngatan")
-  // Group 2: House Number (e.g. "12", "44 B", "12a")
-  // Group 3: Optional City Name at the end (e.g. "Varberg", "Göteborg")
-  const addressRegex = /^([A-ZÅÄÖa-zåäöéèüïäå\-\s]{3,})\s+(\d+\s*[A-Za-zåäöÅÄÖ]?)\b(?:\s+([A-ZÅÄÖa-zåäöéèüïäå\-\s]{3,}))?$/i;
-  const match = cleanText.match(addressRegex);
-  
-  if (match) {
-    const street = match[1].trim();
-    const number = match[2].trim();
-    const city = match[3] ? match[3].trim() : "";
-    
-    let finalStreet = street;
-    if (city) {
-      finalStreet = `${street}, ${city}`;
-    }
-    
-    return {
-      street: finalStreet,
-      number: number
-    };
-  }
-  
-  // Fallback if no house numbers are found in spoken speech (e.g., just "Kungsgatan")
-  return {
-    street: cleanText,
-    number: ""
-  };
-}
-
-// Stop WebRTC camera stream and reset viewport states
-function stopCameraStream() {
-  if (state.cameraStream) {
-    state.cameraStream.getTracks().forEach(track => track.stop());
-    state.cameraStream = null;
-  }
-  
-  // Reset zoom state and style
-  state.zoomFactor = 1.0;
-  const zoomOverlay = document.getElementById('scan-zoom-overlay');
-  if (zoomOverlay) zoomOverlay.classList.add('hide');
-  const zoomSlider = document.getElementById('scan-zoom-slider');
-  if (zoomSlider) zoomSlider.value = 1.0;
-  
-  const video = document.getElementById('scan-video');
-  if (video) {
-    video.srcObject = null;
-    video.style.transform = 'scale(1)';
-    video.classList.add('hide');
-  }
-  const captureBtn = document.getElementById('capture-photo-btn');
-  if (captureBtn) {
-    captureBtn.classList.add('hide');
-  }
-  const switchCameraBtn = document.getElementById('scan-switch-camera-btn');
-  if (switchCameraBtn) {
-    switchCameraBtn.classList.add('hide');
-  }
-  const preview = document.getElementById('scan-preview-container');
-  if (preview) {
-    const canvas = document.getElementById('label-canvas');
-    if (canvas && canvas.classList.contains('hide')) {
-      preview.classList.remove('hide');
-    }
-  }
-  
-  // Deactivate fullscreen camera overlay styling
-  const scanModal = document.getElementById('scan-modal');
-  if (scanModal) {
-    scanModal.classList.remove('camera-active');
-  }
-}
+// WebRTC and Spoken voice parser helpers removed
 
 // ==========================================================================
 // 10. BINDING COMPONENT EVENT LISTENERS
@@ -1563,7 +1351,9 @@ function setupEventListeners() {
       lat: lat,
       lng: lng,
       duration: durInput,
-      status: 'pending'
+      status: 'pending',
+      isPinnedStart: false,
+      isPinnedEnd: false
     };
     
     state.stops.push(newStop);
@@ -1603,355 +1393,7 @@ function setupEventListeners() {
     });
   }
   
-  // Voice Speech recognition setup & event binding (Immersive Continuous Modal View)
-  const voiceBtn = document.getElementById('voice-stop-btn');
-  const voiceModal = document.getElementById('voice-modal');
-  const closeVoiceModalBtn = document.getElementById('close-voice-modal-btn');
-  const approveVoiceBtn = document.getElementById('approve-voice-btn');
-  const voiceAddressesList = document.getElementById('voice-addresses-list');
-  const voiceResultCard = document.getElementById('voice-result-card');
-  const voiceStatusText = document.getElementById('voice-status-text');
-  let voiceRecognition = null;
-  
-  // Register global empty checker for voice list removal actions
-  window.checkVoiceListEmpty = () => {
-    const list = document.getElementById('voice-addresses-list');
-    if (list && list.querySelectorAll('.scanned-address-row').length === 0) {
-      list.innerHTML = `
-        <div class="empty-voice-addresses">
-          <i data-lucide="map-pin" style="width:24px;height:24px;opacity:0.5;margin-bottom:8px;"></i>
-          <p>Inga adresser tolkade än. Säg adresser som "Kungsgatan 12 Varberg" eller "Storgatan 5"...</p>
-        </div>
-      `;
-      lucide.createIcons();
-    }
-  };
-  
-  const handleCloseVoiceModal = () => {
-    state.isListeningToVoice = false;
-    if (voiceRecognition) {
-      try { voiceRecognition.stop(); } catch (e) {}
-    }
-    if (voiceModal) {
-      voiceModal.classList.add('hide');
-      voiceModal.classList.remove('voice-active');
-    }
-    document.body.style.overflow = ''; // unlock background scroll
-  };
-
-  if (voiceBtn && voiceModal) {
-    if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      voiceRecognition = new SpeechRecognition();
-      voiceRecognition.lang = 'sv-SE';
-      voiceRecognition.continuous = true;
-      voiceRecognition.interimResults = true; // Enabled for real-time Gemini-style stream
-      
-      voiceRecognition.onstart = () => {
-        state.isListeningToVoice = true;
-        if (voiceStatusText) {
-          voiceStatusText.innerText = "🎤 Lyssnar... Tala på svenska nu.";
-          voiceStatusText.style.color = '#10B981'; // Neongreen when active listening
-        }
-      };
-      
-      voiceRecognition.onend = () => {
-        if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
-          // Automatic restart for continuous speech entry
-          setTimeout(() => {
-            if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
-              try { voiceRecognition.start(); } catch (err) { console.error('Failed to restart voice recognition:', err); }
-            }
-          }, 350);
-        } else {
-          state.isListeningToVoice = false;
-          if (voiceStatusText) {
-            voiceStatusText.innerText = "Avstängd";
-            voiceStatusText.style.color = 'var(--text-secondary)';
-          }
-        }
-      };
-      
-      voiceRecognition.onerror = (event) => {
-        console.error('Voice recognition modal error:', event.error);
-        if (event.error === 'not-allowed') {
-          alert("Mikrofonbehörighet krävs för röstinmatning. Vänligen tillåt mikrofonen i din webbläsare.");
-          handleCloseVoiceModal();
-        } else if (event.error === 'aborted') {
-          // Ignore manual stops
-        } else {
-          if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
-            setTimeout(() => {
-              if (state.isListeningToVoice && !voiceModal.classList.contains('hide')) {
-                try { voiceRecognition.start(); } catch (e) {}
-              }
-            }, 500);
-          }
-        }
-      };
-      
-      // Real-time parser to sync all addresses from the completed final transcript
-      function syncAddressesFromTranscript(text) {
-        console.log('Syncing addresses from final transcript:', text);
-        
-        // 1. Clean punctuation
-        let cleanText = text.trim().replace(/[\.\?!,]+/g, ' ').replace(/\s+/g, ' ');
-        
-        // 2. Split by Swedish transition/conjunction words used to chain addresses
-        const splitRegex = /\b(?:och sedan|och sen|sedan|sen|nästa stopp|nästa|stopp|eller|och)\b/gi;
-        const parts = cleanText.split(splitRegex);
-        
-        parts.forEach(part => {
-          const trimmedPart = part.trim();
-          if (trimmedPart.length < 3) return;
-          
-          // Try to match street + number structure
-          const parsed = parseSpokenAddress(trimmedPart);
-          if (parsed && parsed.street) {
-            const formattedAddress = parsed.number ? `${parsed.street} ${parsed.number}` : parsed.street;
-            
-            // Check if this address or a partial exists in the checklist
-            const existingRows = Array.from(voiceAddressesList.querySelectorAll('.scanned-address-row'));
-            let alreadyExists = false;
-            let updatedExisting = false;
-            
-            for (const row of existingRows) {
-              const txtInput = row.querySelector('.address-txt');
-              if (txtInput) {
-                const val = txtInput.value.trim();
-                
-                // If it is an exact match
-                if (val.toLowerCase() === formattedAddress.toLowerCase()) {
-                  alreadyExists = true;
-                  break;
-                }
-                
-                // If the checklist contains a prefix (e.g. "Ringvägen") and we now parsed "Ringvägen 10"
-                if (formattedAddress.toLowerCase().startsWith(val.toLowerCase() + ' ')) {
-                  txtInput.value = formattedAddress; // Update in place!
-                  updatedExisting = true;
-                  break;
-                }
-                
-                // If the checklist has "Ringvägen 10" and we got a shorter partial "Ringvägen", ignore it
-                if (val.toLowerCase().startsWith(formattedAddress.toLowerCase() + ' ')) {
-                  alreadyExists = true;
-                  break;
-                }
-              }
-            }
-            
-            if (alreadyExists || updatedExisting) return;
-            
-            // Remove the empty placeholder if present
-            const placeholder = voiceAddressesList.querySelector('.empty-voice-addresses');
-            if (placeholder) {
-              placeholder.remove();
-            }
-            
-            // Generate unique row ID
-            const rowId = `voice-row-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-            const row = document.createElement('div');
-            row.className = 'scanned-address-row';
-            row.style.animation = 'modalOpen 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-            row.innerHTML = `
-              <div class="row-left">
-                <input type="checkbox" checked class="address-chk" id="chk-${rowId}">
-                <i data-lucide="map-pin" class="row-pin-icon text-primary"></i>
-              </div>
-              <input type="text" class="address-txt" value="${formattedAddress}" id="txt-${rowId}" placeholder="Adress...">
-              <button class="btn-remove-row" onclick="this.parentElement.remove(); checkVoiceListEmpty();" title="Ta bort">
-                <i data-lucide="trash-2"></i>
-              </button>
-            `;
-            
-            voiceAddressesList.appendChild(row);
-            lucide.createIcons();
-            
-            // Pulse the section header to provide success feedback
-            const listHeader = voiceResultCard.querySelector('h3');
-            if (listHeader) {
-              listHeader.style.animation = 'pulseGreenText 0.5s ease';
-              setTimeout(() => listHeader.style.animation = '', 500);
-            }
-          }
-        });
-      }
-      
-      voiceRecognition.onresult = (event) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
-        
-        // Accumulate entire session transcript to handle appending speech engines
-        for (let i = 0; i < event.results.length; ++i) {
-          const transcriptText = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcriptText + ' ';
-          } else {
-            interimTranscript += transcriptText;
-          }
-        }
-        
-        // Render transcript box in real time (glowing words stream)
-        const transcriptDiv = document.getElementById('voice-live-transcript');
-        if (transcriptDiv) {
-          let html = '';
-          if (finalTranscript) {
-            html += `<span class="transcript-final">${finalTranscript.trim()} </span>`;
-          }
-          if (interimTranscript) {
-            html += `<span class="transcript-interim">${interimTranscript}...</span>`;
-          }
-          
-          if (!html) {
-            html = `<span class="transcript-placeholder">Börja tala så strömmar orden här i realtid...</span>`;
-          }
-          
-          transcriptDiv.innerHTML = html;
-          transcriptDiv.scrollTop = transcriptDiv.scrollHeight; // Keep scrolled to bottom
-        }
-        
-        // Sync and parse addresses from the accumulated final transcript
-        if (finalTranscript.trim().length >= 3) {
-          syncAddressesFromTranscript(finalTranscript.trim());
-        }
-      };
-      
-      // Trigger voice modal opening on mic click
-      voiceBtn.addEventListener('click', () => {
-        // Clear checklist and show default placeholder
-        voiceAddressesList.innerHTML = `
-          <div class="empty-voice-addresses">
-            <i data-lucide="map-pin" style="width:24px;height:24px;opacity:0.5;margin-bottom:8px;"></i>
-            <p>Inga adresser tolkade än. Säg adresser som "Kungsgatan 12 Varberg" eller "Storgatan 5"...</p>
-          </div>
-        `;
-        lucide.createIcons();
-        
-        const transcriptDiv = document.getElementById('voice-live-transcript');
-        if (transcriptDiv) {
-          transcriptDiv.innerHTML = `<span class="transcript-placeholder">Börja tala så strömmar orden här i realtid...</span>`;
-        }
-        
-        // Open overlay with voice fullscreen class
-        voiceModal.classList.add('voice-active');
-        voiceModal.classList.remove('hide');
-        document.body.style.overflow = 'hidden'; // lock background scroll
-        
-        state.isListeningToVoice = true;
-        try {
-          voiceRecognition.start();
-        } catch (err) {
-          console.error("Failed to start speech recognition:", err);
-        }
-      });
-      
-      if (closeVoiceModalBtn) {
-        closeVoiceModalBtn.addEventListener('click', handleCloseVoiceModal);
-      }
-      
-      // Batch geocoding and stops addition (identical flow to scanned photo stops)
-      if (approveVoiceBtn) {
-        approveVoiceBtn.addEventListener('click', async () => {
-          // Stop recording
-          state.isListeningToVoice = false;
-          try { voiceRecognition.stop(); } catch (e) {}
-          
-          const rows = voiceAddressesList.querySelectorAll('.scanned-address-row');
-          const selectedAddresses = [];
-          
-          rows.forEach(row => {
-            const chk = row.querySelector('.address-chk');
-            const txt = row.querySelector('.address-txt');
-            if (chk && chk.checked && txt && txt.value.trim().length > 0) {
-              selectedAddresses.push({
-                addressText: txt.value.trim(),
-                rowElement: row
-              });
-            }
-          });
-          
-          if (selectedAddresses.length === 0) {
-            alert("Inga adresser valda att spara!");
-            return;
-          }
-          
-          approveVoiceBtn.disabled = true;
-          approveVoiceBtn.innerHTML = `<div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;margin-right:8px;"></div> GEOMAPPAR ADRESSER...`;
-          
-          let successCount = 0;
-          let hasErrors = false;
-          
-          // Batch geocode all in parallel
-          const geocodePromises = selectedAddresses.map(async (item) => {
-            // Remove previous error markings
-            item.rowElement.classList.remove('geocode-error');
-            const txtInput = item.rowElement.querySelector('.address-txt');
-            if (txtInput) {
-              txtInput.style.color = '';
-              txtInput.style.borderColor = '';
-            }
-            
-            try {
-              // Run searchAddress with Sweden country code constraint
-              const results = await searchAddress(item.addressText, true);
-              if (results.length > 0) {
-                const newStop = {
-                  id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-                  address: results[0].address,
-                  lat: results[0].lat,
-                  lng: results[0].lng,
-                  duration: state.globalDuration,
-                  status: 'pending'
-                };
-                state.stops.push(newStop);
-                successCount++;
-                
-                // Color green for visual success feedback
-                item.rowElement.style.borderColor = 'var(--success)';
-                item.rowElement.style.background = 'rgba(16, 185, 129, 0.1)';
-                
-                // Uncheck so they are not saved again on retry
-                const chk = item.rowElement.querySelector('.address-chk');
-                if (chk) chk.checked = false;
-              } else {
-                throw new Error("Geocoding failed");
-              }
-            } catch (err) {
-              hasErrors = true;
-              item.rowElement.classList.add('geocode-error');
-              if (txtInput) {
-                txtInput.style.color = '#FCA5A5';
-                txtInput.style.borderColor = 'var(--danger)';
-              }
-            }
-          });
-          
-          await Promise.all(geocodePromises);
-          
-          approveVoiceBtn.disabled = false;
-          approveVoiceBtn.innerHTML = `<i data-lucide="plus-circle"></i> Lägg till valda stopp i rutt`;
-          lucide.createIcons();
-          
-          if (successCount > 0) {
-            saveStateToStorage();
-            renderStopsList();
-            calculateRoute(false);
-          }
-          
-          if (!hasErrors) {
-            handleCloseVoiceModal();
-          } else {
-            alert("Vissa adresser kunde inte hittas på kartan. Kontrollera och rätta stavningen på de rödmarkerade fälten direkt i rutorna, och klicka sedan på spara igen!");
-          }
-        });
-      }
-    } else {
-      voiceBtn.addEventListener('click', () => {
-        alert("Röstinmatning stöds inte i din nuvarande webbläsare. Använd Google Chrome eller Safari på din mobil!");
-      });
-    }
-  }
+  // Voice feature listeners removed
   
   // 3. Optimize Buttons & Clear Routings
   document.getElementById('optimize-route-btn').addEventListener('click', () => {
@@ -2025,333 +1467,5 @@ function setupEventListeners() {
     });
   });
   
-  // 7. Modal scanning triggers
-  const scanModal = document.getElementById('scan-modal');
-  const closeScanBtn = document.getElementById('close-scan-modal-btn');
-  const cameraTrigger = document.getElementById('camera-scan-trigger-btn');
-  const videoElement = document.getElementById('scan-video');
-  const capturePhotoBtn = document.getElementById('capture-photo-btn');
-  const previewContainer = document.getElementById('scan-preview-container');
-  const canvasElement = document.getElementById('label-canvas');
-  
-  const zoomOverlay = document.getElementById('scan-zoom-overlay');
-  const zoomSlider = document.getElementById('scan-zoom-slider');
-  
-  // Track zoom level changes
-  zoomSlider.addEventListener('input', (e) => {
-    const zoom = parseFloat(e.target.value);
-    state.zoomFactor = zoom;
-    videoElement.style.transform = `scale(${zoom})`;
-  });
-  
-  // Camera Switching & Setup Helpers
-  const startCamera = async (deviceId = null) => {
-    if (state.cameraStream) {
-      state.cameraStream.getTracks().forEach(track => track.stop());
-      state.cameraStream = null;
-    }
-    
-    const constraints = {
-      video: {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
-      }
-    };
-    
-    if (deviceId) {
-      constraints.video.deviceId = { exact: deviceId };
-    } else {
-      constraints.video.facingMode = { ideal: 'environment' };
-    }
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      state.cameraStream = stream;
-      videoElement.srcObject = stream;
-      videoElement.classList.remove('hide');
-      zoomOverlay.classList.remove('hide');
-      previewContainer.classList.add('hide');
-      capturePhotoBtn.classList.remove('hide');
-      scanModal.classList.add('camera-active');
-      
-      // Force hardware sensor zoom to minimum (most zoomed out) if supported
-      try {
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack && typeof videoTrack.getCapabilities === 'function') {
-          const capabilities = videoTrack.getCapabilities();
-          if ('zoom' in capabilities) {
-            await videoTrack.applyConstraints({
-              advanced: [{ zoom: capabilities.zoom.min || 1.0 }]
-            });
-          }
-        }
-      } catch (zoomErr) {
-        console.warn("Hardware zoom min constraints failed:", zoomErr);
-      }
-      
-      // Scan and find other back cameras (now that we have permissions granted!)
-      await enumerateBackCameras(stream);
-      
-    } catch (err) {
-      console.warn("Could not start camera track:", err);
-      if (deviceId) {
-        // Fallback to default back camera if specific lens failed
-        await startCamera(null);
-      } else {
-        stopCameraStream();
-      }
-    }
-  };
-
-  const enumerateBackCameras = async (activeStream) => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-    
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(d => d.kind === 'videoinput');
-      
-      // Find back cameras (exclude front/user facing ones if labels exist)
-      const backCameras = videoDevices.filter(device => {
-        const label = (device.label || '').toLowerCase();
-        return !label.includes('front') && !label.includes('user');
-      });
-      
-      const finalCameras = backCameras.length > 0 ? backCameras : videoDevices;
-      state.availableCameras = finalCameras.map(c => c.deviceId);
-      
-      // Detect current device ID
-      if (activeStream) {
-        const activeTrack = activeStream.getVideoTracks()[0];
-        if (activeTrack && activeTrack.getSettings) {
-          const activeDeviceId = activeTrack.getSettings().deviceId;
-          if (activeDeviceId) {
-            const idx = state.availableCameras.indexOf(activeDeviceId);
-            if (idx !== -1) {
-              state.currentCameraIndex = idx;
-            }
-          }
-        }
-      }
-      
-      // Show switcher if we discovered multiple lenses
-      const switchBtn = document.getElementById('scan-switch-camera-btn');
-      if (switchBtn) {
-        if (state.availableCameras.length > 1) {
-          switchBtn.classList.remove('hide');
-        } else {
-          switchBtn.classList.add('hide');
-        }
-      }
-    } catch (e) {
-      console.warn("Device enumeration failed:", e);
-    }
-  };
-
-  cameraTrigger.addEventListener('click', () => {
-    scanModal.classList.remove('hide');
-    canvasElement.classList.add('hide');
-    document.getElementById('scan-result-card').classList.add('hide');
-    previewContainer.classList.remove('hide');
-    
-    state.zoomFactor = 1.0;
-    zoomSlider.value = 1.0;
-    videoElement.style.transform = 'scale(1)';
-    
-    // Start camera stream (default back lens)
-    startCamera(null);
-  });
-  
-  // Lens switch button click
-  const switchCameraBtn = document.getElementById('scan-switch-camera-btn');
-  if (switchCameraBtn) {
-    switchCameraBtn.addEventListener('click', () => {
-      if (state.availableCameras.length <= 1) return;
-      
-      // Cycle index
-      state.currentCameraIndex = (state.currentCameraIndex + 1) % state.availableCameras.length;
-      const nextDeviceId = state.availableCameras[state.currentCameraIndex];
-      
-      startCamera(nextDeviceId);
-    });
-  }
-  
-  // Capture photo from live video stream
-  capturePhotoBtn.addEventListener('click', () => {
-    if (!state.cameraStream) return;
-    
-    const ctx = canvasElement.getContext('2d');
-    canvasElement.width = videoElement.videoWidth || 640;
-    canvasElement.height = videoElement.videoHeight || 480;
-    
-    const zoom = state.zoomFactor || 1.0;
-    
-    if (zoom > 1.0) {
-      // Draw mathematically cropped/zoomed camera view onto canvas
-      const cropWidth = canvasElement.width / zoom;
-      const cropHeight = canvasElement.height / zoom;
-      const startX = (canvasElement.width - cropWidth) / 2;
-      const startY = (canvasElement.height - cropHeight) / 2;
-      
-      ctx.drawImage(videoElement, startX, startY, cropWidth, cropHeight, 0, 0, canvasElement.width, canvasElement.height);
-    } else {
-      // Draw current full video frame onto canvas
-      ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
-    }
-    
-    // Stop live stream immediately
-    stopCameraStream();
-    
-    // Show canvas, hide video & overlay
-    videoElement.classList.add('hide');
-    zoomOverlay.classList.add('hide');
-    canvasElement.classList.remove('hide');
-    capturePhotoBtn.classList.add('hide');
-    previewContainer.classList.add('hide');
-    
-    // Run Tesseract OCR on canvas
-    runOCRScan(canvasElement);
-  });
-  
-  closeScanBtn.addEventListener('click', () => {
-    stopCameraStream();
-    scanModal.classList.add('hide');
-  });
-  
-  // Clicked outside modal content close trigger
-  scanModal.addEventListener('click', (e) => {
-    if (e.target === scanModal) {
-      stopCameraStream();
-      scanModal.classList.add('hide');
-    }
-  });
-  
-  // Scan file input trigger
-  const fileInput = document.getElementById('scan-file-input');
-  fileInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    // Stop live camera if it was running
-    stopCameraStream();
-    
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const ctx = canvasElement.getContext('2d');
-      const img = new Image();
-      
-      img.onload = () => {
-        canvasElement.width = img.width;
-        canvasElement.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        canvasElement.classList.remove('hide');
-        previewContainer.classList.add('hide');
-        videoElement.classList.add('hide');
-        zoomOverlay.classList.add('hide');
-        capturePhotoBtn.classList.add('hide');
-        
-        // Perform OCR analysis
-        runOCRScan(canvasElement);
-      };
-      img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-  
-  // Generate & Scan Test Label
-  document.getElementById('generate-test-label-btn').addEventListener('click', () => {
-    // Stop live camera if running
-    stopCameraStream();
-    
-    generateMockLabelCanvas();
-    runOCRScan(canvasElement);
-  });
-  
-  // Approve scanned OCR address & inject into route list
-  document.getElementById('approve-scan-btn').addEventListener('click', async () => {
-    const rows = document.querySelectorAll('.scanned-address-row');
-    const durInput = state.globalDuration; // Always use the global duration directly!
-    
-    // First, clear any previous error stylings
-    rows.forEach(row => {
-      row.classList.remove('geocode-error');
-      const txt = row.querySelector('.address-txt');
-      if (txt) txt.style.borderColor = '';
-    });
-    
-    // Count checked rows
-    let checkedCount = 0;
-    rows.forEach(row => {
-      const chk = row.querySelector('.address-chk');
-      if (chk && chk.checked) checkedCount++;
-    });
-    
-    if (checkedCount === 0) {
-      alert("Inga adresser är markerade!");
-      return;
-    }
-    
-    // UI Button feedback to show loading state
-    const approveBtn = document.getElementById('approve-scan-btn');
-    const originalHtml = approveBtn.innerHTML;
-    approveBtn.disabled = true;
-    approveBtn.innerHTML = `<span class="spinner" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle; margin-right: 8px; border-width: 2px;"></span> Geokodar adresser...`;
-    
-    let addedCount = 0;
-    let failedCount = 0;
-    
-    // Geocode and add each selected address to the route list
-    for (const row of rows) {
-      const chk = row.querySelector('.address-chk');
-      const txt = row.querySelector('.address-txt');
-      
-      if (chk && chk.checked && txt && txt.value.trim().length > 0) {
-        const addr = txt.value.trim();
-        try {
-          const results = await searchAddress(addr, true);
-          if (results.length > 0) {
-            const newStop = {
-              id: 'stop_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-              address: results[0].address,
-              lat: results[0].lat,
-              lng: results[0].lng,
-              duration: durInput,
-              status: 'pending'
-            };
-            state.stops.push(newStop);
-            addedCount++;
-            
-            // Successfully geocoded! Uncheck this box so they don't add it again by mistake
-            chk.checked = false;
-          } else {
-            // Geocoding returned zero matches on map
-            failedCount++;
-            row.classList.add('geocode-error');
-            txt.style.borderColor = 'var(--danger)';
-          }
-        } catch (err) {
-          console.error("Geocoding failed for:", addr, err);
-          failedCount++;
-          row.classList.add('geocode-error');
-          txt.style.borderColor = 'var(--danger)';
-        }
-      }
-    }
-    
-    approveBtn.disabled = false;
-    approveBtn.innerHTML = originalHtml;
-    
-    if (addedCount > 0) {
-      saveStateToStorage();
-      renderStopsList();
-      calculateRoute(false);
-    }
-    
-    if (failedCount > 0) {
-      alert(`Klar! ${addedCount} stopp lades till i listan.\n\n${failedCount} adresser kunde inte hittas på kartan och har rödmarkerats. Kontrollera stavningen på de rödmarkerade fälten (t.ex. lägg till gatunummer eller rätta stavfel) direkt i rutorna, och klicka sedan på "Lägg till" igen!`);
-    } else {
-      // Everything succeeded, safe to close modal!
-      stopCameraStream();
-      scanModal.classList.add('hide');
-    }
-  });
+  // Camera and OCR scanning listeners removed
 }
